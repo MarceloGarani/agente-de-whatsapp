@@ -1,0 +1,501 @@
+{
+  "storyId": "EPIC-1",
+  "gatheredAt": "2026-02-16T12:00:00.000Z",
+  "source": "prd",
+  "gatheredBy": "@pm",
+  "elicitationVersion": "2.0",
+  "projectTitle": "Assistente Pessoal Inteligente via WhatsApp",
+
+  "functional": [
+    {
+      "id": "FR-1",
+      "description": "Receber mensagens de texto do usuário via WhatsApp Business API e interpretar a intenção usando LLM (OpenAI GPT)",
+      "priority": "P0",
+      "rationale": "Canal principal de interação do usuário — sem isso, nenhuma funcionalidade opera",
+      "acceptance": [
+        "AC-1.1: Given mensagem de texto recebida no WhatsApp, When o agente processa a mensagem, Then a intenção é classificada corretamente em uma das categorias: upload_arquivo, criar_evento, criar_reuniao, cancelar_evento, lembrete, ajuda",
+        "AC-1.2: Given mensagem ambígua, When o agente não consegue classificar com confiança, Then solicita clarificação ao usuário"
+      ]
+    },
+    {
+      "id": "FR-2",
+      "description": "Receber mensagens de áudio do usuário, transcrever via speech-to-text (Whisper ou similar) e interpretar como comando de texto",
+      "priority": "P0",
+      "rationale": "Áudio é formato comum no WhatsApp — necessário para experiência natural",
+      "acceptance": [
+        "AC-2.1: Given áudio recebido no WhatsApp, When o agente processa, Then o áudio é transcrito em texto e processado como comando",
+        "AC-2.2: Given áudio com baixa qualidade/inaudível, When transcrição falha ou confiança é baixa, Then o agente pede ao usuário para repetir ou enviar por texto"
+      ]
+    },
+    {
+      "id": "FR-3",
+      "description": "Upload automático de arquivos enviados via WhatsApp para o Google Drive, com organização automática em pastas por tipo e data",
+      "priority": "P0",
+      "rationale": "Funcionalidade core #1 — gestão de arquivos no Drive",
+      "acceptance": [
+        "AC-3.1: Given arquivo enviado no WhatsApp com comando 'salvar no drive', When o agente processa, Then o arquivo é uploaded para o Google Drive",
+        "AC-3.2: Given arquivo uploaded com sucesso, When organização automática ativa, Then o arquivo é classificado em pasta por tipo (imagens/, documentos/, planilhas/, etc.) e subpasta por mês/ano",
+        "AC-3.3: Given upload concluído, When sucesso, Then o agente confirma ao usuário com nome do arquivo e localização no Drive"
+      ]
+    },
+    {
+      "id": "FR-4",
+      "description": "Criação automática de eventos no Google Calendar a partir de linguagem natural, interpretando data, horário e descrição",
+      "priority": "P0",
+      "rationale": "Funcionalidade core #2 — organização de agenda",
+      "acceptance": [
+        "AC-4.1: Given mensagem 'tenho dentista amanhã às 15h', When processada, Then evento 'Dentista' é criado no Google Calendar para amanhã 15:00",
+        "AC-4.2: Given mensagem com data relativa ('próxima sexta', 'daqui 2 dias'), When processada, Then a data é resolvida corretamente",
+        "AC-4.3: Given evento criado com sucesso, Then o agente confirma com resumo: nome, data, horário"
+      ]
+    },
+    {
+      "id": "FR-5",
+      "description": "Cancelamento de eventos existentes no Google Calendar por comando do usuário",
+      "priority": "P1",
+      "rationale": "Usuário precisa poder desfazer ações — sem edição na v1, mas cancelamento é essencial",
+      "acceptance": [
+        "AC-5.1: Given comando 'cancelar reunião de sexta', When o agente identifica o evento, Then solicita confirmação antes de cancelar",
+        "AC-5.2: Given confirmação do usuário, When evento cancelado, Then o agente confirma o cancelamento",
+        "AC-5.3: Given múltiplos eventos no mesmo dia, When ambiguidade, Then o agente lista os eventos e pede seleção"
+      ]
+    },
+    {
+      "id": "FR-6",
+      "description": "Criação de reuniões com geração automática de link Google Meet e envio de convites aos participantes via email e/ou WhatsApp",
+      "priority": "P0",
+      "rationale": "Funcionalidade core #3 — coordenação de reuniões",
+      "acceptance": [
+        "AC-6.1: Given comando 'reunião amanhã às 10h com joao@email.com', When processado, Then evento é criado no Calendar com link Google Meet",
+        "AC-6.2: Given participantes com email, When evento criado, Then convite é enviado via Gmail com link do Meet",
+        "AC-6.3: Given participantes com telefone/WhatsApp, When evento criado, Then convite é enviado via WhatsApp Business API com link do Meet",
+        "AC-6.4: Given participante com email e telefone, When o agente decide, Then prioriza o canal disponível (email se tem email, WhatsApp se tem telefone)"
+      ]
+    },
+    {
+      "id": "FR-7",
+      "description": "Envio de lembretes automáticos via WhatsApp antes de compromissos agendados",
+      "priority": "P1",
+      "rationale": "Proatividade do assistente — lembrar o usuário de compromissos próximos",
+      "acceptance": [
+        "AC-7.1: Given evento no Calendar com horário futuro, When falta X minutos (configurável, default 30min), Then lembrete é enviado via WhatsApp",
+        "AC-7.2: Given lembrete enviado, Then inclui nome do evento, horário e link Meet (se aplicável)"
+      ]
+    },
+    {
+      "id": "FR-8",
+      "description": "Cancelamento de reuniões com notificação automática aos participantes previamente convidados",
+      "priority": "P1",
+      "rationale": "Cancelar reunião deve notificar os envolvidos para manter a coordenação",
+      "acceptance": [
+        "AC-8.1: Given reunião cancelada pelo usuário, When participantes existem, Then cada participante recebe notificação de cancelamento pelo mesmo canal do convite original"
+      ]
+    }
+  ],
+
+  "nonFunctional": [
+    {
+      "id": "NFR-1",
+      "category": "performance",
+      "description": "Tempo de resposta do agente deve ser inferior a 30 segundos para qualquer operação, incluindo chamadas a APIs externas",
+      "metric": "p95 latência < 30s end-to-end (recebimento da mensagem → resposta ao usuário)"
+    },
+    {
+      "id": "NFR-2",
+      "category": "usability",
+      "description": "Interface deve ser intuitiva via linguagem natural em português — o usuário não precisa aprender comandos específicos",
+      "metric": "Usuário consegue executar qualquer funcionalidade sem consultar manual"
+    },
+    {
+      "id": "NFR-3",
+      "category": "reliability",
+      "description": "O sistema deve ser resiliente a falhas de APIs externas, notificando o usuário quando uma operação não pode ser completada",
+      "metric": "Zero operações silenciosamente perdidas — toda falha gera notificação ao usuário"
+    },
+    {
+      "id": "NFR-4",
+      "category": "security",
+      "description": "Tokens de acesso Google (OAuth) devem ser armazenados de forma segura, com refresh token criptografado. Decisão de implementação delegada ao @architect",
+      "metric": "Nenhum token exposto em logs, env vars em plaintext ou código-fonte"
+    },
+    {
+      "id": "NFR-5",
+      "category": "scalability",
+      "description": "Arquitetura v1 para uso pessoal (1 usuário), mas projetada para suportar multi-tenant no futuro sem reescrita significativa",
+      "metric": "Dados do usuário isolados por design (user_id em todas as entidades)"
+    },
+    {
+      "id": "NFR-6",
+      "category": "usability",
+      "description": "Transcrição de áudio deve suportar português brasileiro com precisão aceitável",
+      "metric": "Acurácia de transcrição > 90% para áudios claros em pt-BR"
+    }
+  ],
+
+  "constraints": [
+    {
+      "id": "CON-1",
+      "type": "technical",
+      "description": "Backend deve ser implementado em Node.js com TypeScript",
+      "impact": "Define stack de desenvolvimento, bibliotecas e tooling disponível"
+    },
+    {
+      "id": "CON-2",
+      "type": "technical",
+      "description": "Integração com WhatsApp deve usar WhatsApp Business API (Cloud API via Meta)",
+      "impact": "Requer conta Meta Business verificada e número de telefone dedicado"
+    },
+    {
+      "id": "CON-3",
+      "type": "technical",
+      "description": "Todas as integrações Google (Drive, Calendar, Meet, Gmail) devem usar APIs oficiais do Google",
+      "impact": "Requer Google Cloud Project com APIs habilitadas e credenciais OAuth configuradas"
+    },
+    {
+      "id": "CON-4",
+      "type": "technical",
+      "description": "LLM para interpretação de linguagem natural: OpenAI GPT (GPT-4o ou similar)",
+      "impact": "Custo por requisição, dependência de API externa, necessidade de API key"
+    },
+    {
+      "id": "CON-5",
+      "type": "technical",
+      "description": "Speech-to-text para transcrição de áudio (Whisper API ou similar)",
+      "impact": "Custo adicional por minuto de áudio, latência de processamento"
+    },
+    {
+      "id": "CON-6",
+      "type": "business",
+      "description": "v1 escopo pessoal (single-user), com arquitetura preparada para multi-tenant futuro",
+      "impact": "Simplifica autenticação e permissões na v1, mas modelo de dados deve prever isolamento"
+    }
+  ],
+
+  "assumptions": [
+    {
+      "id": "ASM-1",
+      "description": "O usuário possui conta Google ativa com acesso a Drive, Calendar e Gmail",
+      "risk_if_wrong": "Funcionalidades Google ficam completamente inoperantes",
+      "validation_needed": true
+    },
+    {
+      "id": "ASM-2",
+      "description": "O usuário utiliza WhatsApp e enviará mensagens para um número dedicado do agente",
+      "risk_if_wrong": "Sem canal de comunicação com o agente",
+      "validation_needed": false
+    },
+    {
+      "id": "ASM-3",
+      "description": "A conta Meta Business estará verificada e aprovada para uso do WhatsApp Business API",
+      "risk_if_wrong": "Impossibilidade de receber/enviar mensagens via API — bloqueio total",
+      "validation_needed": true
+    },
+    {
+      "id": "ASM-4",
+      "description": "As APIs do Google e WhatsApp estarão disponíveis com uptime suficiente para uso pessoal",
+      "risk_if_wrong": "Degradação temporária de funcionalidades — mitigado por NFR-3 (notificação de falhas)",
+      "validation_needed": false
+    },
+    {
+      "id": "ASM-5",
+      "description": "OpenAI API estará acessível e com custo viável para volume de uso pessoal",
+      "risk_if_wrong": "Custo inesperado ou indisponibilidade da LLM — considerar fallback para modelo local",
+      "validation_needed": true
+    },
+    {
+      "id": "ASM-6",
+      "description": "Participantes de reuniões serão identificados por email ou telefone informados na mensagem (sem lista pré-cadastrada)",
+      "risk_if_wrong": "Experiência ruim se usuário precisar digitar contatos longos repetidamente",
+      "validation_needed": false
+    }
+  ],
+
+  "domainModel": [
+    {
+      "id": "DM-1",
+      "entity": "User",
+      "attributes": ["id", "whatsapp_phone", "google_oauth_tokens", "preferences", "created_at"],
+      "relationships": [
+        { "type": "has_many", "target": "FileUpload" },
+        { "type": "has_many", "target": "CalendarEvent" },
+        { "type": "has_many", "target": "Meeting" },
+        { "type": "has_many", "target": "Conversation" }
+      ]
+    },
+    {
+      "id": "DM-2",
+      "entity": "Conversation",
+      "attributes": ["id", "user_id", "whatsapp_message_id", "raw_text", "transcribed_text", "detected_intent", "status", "created_at"],
+      "relationships": [
+        { "type": "belongs_to", "target": "User" },
+        { "type": "has_one", "target": "FileUpload" },
+        { "type": "has_one", "target": "CalendarEvent" },
+        { "type": "has_one", "target": "Meeting" }
+      ]
+    },
+    {
+      "id": "DM-3",
+      "entity": "FileUpload",
+      "attributes": ["id", "user_id", "conversation_id", "original_filename", "mime_type", "drive_file_id", "drive_folder_path", "status", "created_at"],
+      "relationships": [
+        { "type": "belongs_to", "target": "User" },
+        { "type": "belongs_to", "target": "Conversation" }
+      ]
+    },
+    {
+      "id": "DM-4",
+      "entity": "CalendarEvent",
+      "attributes": ["id", "user_id", "conversation_id", "google_event_id", "title", "start_time", "end_time", "description", "status", "created_at"],
+      "relationships": [
+        { "type": "belongs_to", "target": "User" },
+        { "type": "belongs_to", "target": "Conversation" },
+        { "type": "has_many", "target": "Reminder" }
+      ]
+    },
+    {
+      "id": "DM-5",
+      "entity": "Meeting",
+      "attributes": ["id", "user_id", "conversation_id", "calendar_event_id", "meet_link", "status", "created_at"],
+      "relationships": [
+        { "type": "belongs_to", "target": "User" },
+        { "type": "belongs_to", "target": "Conversation" },
+        { "type": "belongs_to", "target": "CalendarEvent" },
+        { "type": "has_many", "target": "Participant" }
+      ]
+    },
+    {
+      "id": "DM-6",
+      "entity": "Participant",
+      "attributes": ["id", "meeting_id", "name", "email", "phone", "invite_channel", "invite_status", "created_at"],
+      "relationships": [
+        { "type": "belongs_to", "target": "Meeting" }
+      ]
+    },
+    {
+      "id": "DM-7",
+      "entity": "Reminder",
+      "attributes": ["id", "calendar_event_id", "remind_at", "sent", "channel"],
+      "relationships": [
+        { "type": "belongs_to", "target": "CalendarEvent" }
+      ]
+    }
+  ],
+
+  "interactions": [
+    {
+      "id": "INT-1",
+      "trigger": "Usuário envia arquivo + mensagem de texto/áudio pedindo para salvar",
+      "flow": [
+        "1. Recebe mensagem + arquivo via WhatsApp webhook",
+        "2. Transcreve áudio se necessário",
+        "3. LLM classifica intenção como 'upload_arquivo'",
+        "4. Download do arquivo do WhatsApp media",
+        "5. Classificação automática do tipo de arquivo",
+        "6. Upload para Google Drive na pasta correta",
+        "7. Responde ao usuário com confirmação e localização"
+      ],
+      "states": {
+        "loading": "Mensagem de 'Processando seu arquivo...' enviada imediatamente",
+        "error": "Mensagem de erro explicando o problema (ex: 'Não consegui acessar seu Google Drive')",
+        "empty": "N/A"
+      }
+    },
+    {
+      "id": "INT-2",
+      "trigger": "Usuário menciona compromisso com data/horário",
+      "flow": [
+        "1. Recebe mensagem via WhatsApp webhook",
+        "2. Transcreve áudio se necessário",
+        "3. LLM extrai: título, data, horário, duração (default 1h)",
+        "4. Cria evento no Google Calendar via API",
+        "5. Agenda lembrete automático (default 30min antes)",
+        "6. Responde com resumo do evento criado"
+      ],
+      "states": {
+        "loading": "Mensagem 'Agendando seu compromisso...'",
+        "error": "Mensagem de erro (ex: 'Não consegui acessar sua agenda')",
+        "empty": "N/A"
+      }
+    },
+    {
+      "id": "INT-3",
+      "trigger": "Usuário pede para criar reunião com participantes",
+      "flow": [
+        "1. Recebe mensagem via WhatsApp webhook",
+        "2. Transcreve áudio se necessário",
+        "3. LLM extrai: título, data, horário, participantes (email/telefone)",
+        "4. Cria evento no Google Calendar",
+        "5. Gera link Google Meet automaticamente",
+        "6. Envia convites: email via Gmail API, WhatsApp via Business API",
+        "7. Responde com resumo: evento + link Meet + status dos convites"
+      ],
+      "states": {
+        "loading": "Mensagem 'Organizando sua reunião...'",
+        "error": "Mensagem de erro parcial (ex: 'Reunião criada mas não consegui enviar convite para X')",
+        "empty": "N/A"
+      }
+    },
+    {
+      "id": "INT-4",
+      "trigger": "Usuário pede para cancelar evento/reunião",
+      "flow": [
+        "1. Recebe mensagem via WhatsApp webhook",
+        "2. LLM identifica intenção de cancelamento e extrai referência ao evento",
+        "3. Busca eventos matching no Google Calendar",
+        "4. Se múltiplos resultados, lista opções e pede seleção",
+        "5. Pede confirmação: 'Cancelar [evento] em [data]?'",
+        "6. Cancela evento no Calendar e notifica participantes se reunião",
+        "7. Responde com confirmação de cancelamento"
+      ],
+      "states": {
+        "loading": "Mensagem 'Buscando seu evento...'",
+        "error": "Mensagem 'Não encontrei nenhum evento com essa descrição'",
+        "empty": "Mensagem 'Você não tem eventos agendados para esse período'"
+      }
+    },
+    {
+      "id": "INT-5",
+      "trigger": "Sistema detecta compromisso próximo (lembrete automático)",
+      "flow": [
+        "1. Scheduler verifica eventos próximos periodicamente",
+        "2. Identifica eventos com remind_at <= agora",
+        "3. Envia lembrete via WhatsApp com detalhes do evento",
+        "4. Marca lembrete como enviado"
+      ],
+      "states": {
+        "loading": "N/A (processo em background)",
+        "error": "Log de erro, retry na próxima verificação",
+        "empty": "Nenhum lembrete pendente, nada acontece"
+      }
+    }
+  ],
+
+  "edgeCases": [
+    {
+      "id": "EC-1",
+      "scenario": "API do Google indisponível (Drive, Calendar ou Gmail)",
+      "handling": "Notificar usuário com mensagem explicativa e sugerir que tente novamente em alguns minutos",
+      "severity": "high"
+    },
+    {
+      "id": "EC-2",
+      "scenario": "WhatsApp Business API indisponível ou rate-limited",
+      "handling": "Log do erro; convites/lembretes pendentes ficam em fila para retry quando API voltar",
+      "severity": "high"
+    },
+    {
+      "id": "EC-3",
+      "scenario": "Áudio inaudível ou em idioma não suportado",
+      "handling": "Responder: 'Não consegui entender o áudio. Pode enviar por texto?'",
+      "severity": "medium"
+    },
+    {
+      "id": "EC-4",
+      "scenario": "Mensagem ambígua — LLM não consegue determinar intenção com confiança",
+      "handling": "Pedir clarificação ao usuário com opções sugeridas",
+      "severity": "medium"
+    },
+    {
+      "id": "EC-5",
+      "scenario": "Usuário tenta agendar evento no passado",
+      "handling": "Informar que a data já passou e perguntar se deseja agendar para a próxima ocorrência",
+      "severity": "low"
+    },
+    {
+      "id": "EC-6",
+      "scenario": "Arquivo muito grande para upload no WhatsApp ou Drive",
+      "handling": "Informar limite de tamanho e sugerir alternativas",
+      "severity": "medium"
+    },
+    {
+      "id": "EC-7",
+      "scenario": "Token OAuth do Google expirado e refresh token inválido",
+      "handling": "Notificar usuário que precisa reconectar sua conta Google e enviar link de re-autorização",
+      "severity": "critical"
+    },
+    {
+      "id": "EC-8",
+      "scenario": "Participante de reunião com email inválido ou telefone não-WhatsApp",
+      "handling": "Informar quais convites falharam e por quê, os demais são enviados normalmente",
+      "severity": "medium"
+    },
+    {
+      "id": "EC-9",
+      "scenario": "Conflito de horário — evento novo sobrepõe evento existente",
+      "handling": "Avisar o usuário sobre o conflito e perguntar se deseja criar mesmo assim",
+      "severity": "medium"
+    }
+  ],
+
+  "terminology": [
+    {
+      "term": "Agente",
+      "definition": "O assistente de IA integrado ao WhatsApp que processa comandos do usuário",
+      "synonyms": ["assistente", "bot"],
+      "avoid": ["chatbot"]
+    },
+    {
+      "term": "Evento",
+      "definition": "Compromisso genérico no Google Calendar (sem participantes externos ou Meet)",
+      "synonyms": ["compromisso", "lembrete de agenda"],
+      "avoid": []
+    },
+    {
+      "term": "Reunião",
+      "definition": "Evento com participantes externos e link Google Meet — subtipo de Evento",
+      "synonyms": ["meeting", "call"],
+      "avoid": []
+    },
+    {
+      "term": "Convite",
+      "definition": "Notificação enviada a participantes de reunião com detalhes e link Meet",
+      "synonyms": ["invite"],
+      "avoid": []
+    },
+    {
+      "term": "Intenção",
+      "definition": "Classificação do propósito da mensagem do usuário feita pela LLM (intent detection)",
+      "synonyms": ["intent"],
+      "avoid": ["comando"]
+    },
+    {
+      "term": "Transcrição",
+      "definition": "Conversão de áudio em texto via speech-to-text antes do processamento pela LLM",
+      "synonyms": ["STT"],
+      "avoid": []
+    }
+  ],
+
+  "openQuestions": [
+    {
+      "id": "OQ-1",
+      "question": "Qual provedor de hosting será usado para deploy? (Vercel, Railway, AWS, VPS?)",
+      "blocking": false,
+      "assignedTo": "@architect"
+    },
+    {
+      "id": "OQ-2",
+      "question": "Qual banco de dados para persistência? (PostgreSQL/Supabase, SQLite, MongoDB?)",
+      "blocking": false,
+      "assignedTo": "@architect"
+    },
+    {
+      "id": "OQ-3",
+      "question": "Estratégia de autenticação OAuth 2.0 com Google — decisão delegada ao @architect",
+      "blocking": true,
+      "assignedTo": "@architect"
+    },
+    {
+      "id": "OQ-4",
+      "question": "Será necessário número de WhatsApp Business verificado — como obter para ambiente de desenvolvimento/teste?",
+      "blocking": true,
+      "assignedTo": "@devops"
+    },
+    {
+      "id": "OQ-5",
+      "question": "Qual o intervalo padrão de lembrete antes de eventos? Configurável pelo usuário?",
+      "blocking": false,
+      "assignedTo": "@pm"
+    }
+  ]
+}

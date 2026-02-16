@@ -1,0 +1,579 @@
+{
+  "storyId": "EPIC-1",
+  "researchedAt": "2026-02-16T13:00:00.000Z",
+  "researchedBy": "@analyst",
+  "complexity": "COMPLEX",
+
+  "dependencies": [
+    {
+      "name": "WhatsApp Business Cloud API",
+      "type": "api",
+      "version": "v21.0 (Graph API)",
+      "verified": true,
+      "source": "manual",
+      "existing": {
+        "installed": false,
+        "currentVersion": null,
+        "usageLocations": []
+      },
+      "documentation": {
+        "url": "https://developers.facebook.com/docs/whatsapp/cloud-api",
+        "relevantSections": [
+          "Getting Started / API Setup",
+          "Webhooks (GET verification, POST messages)",
+          "Messages API (send text, template, media)",
+          "Media API (download audio/documents)",
+          "Phone Numbers registration"
+        ]
+      },
+      "patterns": [
+        {
+          "name": "Webhook Handler",
+          "description": "Express.js GET (verification) + POST (receive messages). Responder 200 OK imediatamente e processar async.",
+          "codeExample": "app.post('/webhook', (req, res) => { res.sendStatus(200); processAsync(req.body); });"
+        },
+        {
+          "name": "Send Text Message",
+          "description": "POST para graph.facebook.com/v21.0/{PHONE_ID}/messages com bearer token",
+          "codeExample": "axios.post(url, { messaging_product: 'whatsapp', to, type: 'text', text: { body } })"
+        },
+        {
+          "name": "Media Download (2-step)",
+          "description": "1) GET media ID → URL temporária (5min). 2) GET URL → binário (arraybuffer)",
+          "codeExample": "const url = await getMediaUrl(mediaId); const buffer = await axios.get(url, { responseType: 'arraybuffer' });"
+        },
+        {
+          "name": "Template Messages (Convites)",
+          "description": "Para enviar mensagens a terceiros fora da janela 24h, usar templates pré-aprovados pela Meta",
+          "codeExample": "{ type: 'template', template: { name: 'meeting_invite', language: { code: 'pt_BR' } } }"
+        }
+      ],
+      "compatibility": {
+        "preferred": true,
+        "alternatives": [],
+        "conflicts": []
+      },
+      "keyFindings": {
+        "pricing": "Mensagens de serviço (dentro janela 24h) são GRATUITAS. Templates (business-initiated): ~R$0.15-0.50/msg",
+        "rateLimits": "80 msgs/segundo por Phone Number. Tier 1: 250 conversas/24h (crescente com verificação)",
+        "testEnvironment": "Meta fornece número de teste + token temporário (24h). Até 5 números de teste. HTTPS obrigatório (usar ngrok)",
+        "criticalRequirement": "Conta Meta Business verificada necessária para produção. Sandbox disponível para desenvolvimento.",
+        "audioFormat": "WhatsApp envia áudio como OGG/Opus"
+      }
+    },
+    {
+      "name": "Google OAuth 2.0",
+      "type": "api",
+      "version": "v2",
+      "verified": true,
+      "source": "manual",
+      "existing": {
+        "installed": false,
+        "currentVersion": null,
+        "usageLocations": []
+      },
+      "documentation": {
+        "url": "https://developers.google.com/identity/protocols/oauth2/web-server",
+        "relevantSections": [
+          "Authorization Code Flow (server-side)",
+          "Refresh Token lifecycle",
+          "Scopes reference",
+          "OAuth consent screen setup"
+        ]
+      },
+      "patterns": [
+        {
+          "name": "Authorization Code Flow",
+          "description": "Gerar authUrl → usuário autoriza → callback com code → trocar por tokens → armazenar refresh_token",
+          "codeExample": "const { tokens } = await oauth2Client.getToken(code); // tokens.refresh_token"
+        },
+        {
+          "name": "Refresh Token Auto-Renewal",
+          "description": "googleapis client renova access_token automaticamente usando refresh_token",
+          "codeExample": "oauth2Client.setCredentials({ refresh_token: stored }); // Auto-renew"
+        }
+      ],
+      "compatibility": {
+        "preferred": true,
+        "alternatives": ["Service Account (para uso interno)"],
+        "conflicts": []
+      },
+      "keyFindings": {
+        "scopes": "drive.file + calendar + gmail.send (mínimo necessário)",
+        "refreshToken": "Só retorna na PRIMEIRA autorização. Usar access_type:'offline' + prompt:'consent'",
+        "testMode": "OAuth consent screen em modo 'Testing' permite até 100 usuários sem verificação Google"
+      }
+    },
+    {
+      "name": "Google Drive API",
+      "type": "api",
+      "version": "v3",
+      "verified": true,
+      "source": "manual",
+      "existing": {
+        "installed": false,
+        "currentVersion": null,
+        "usageLocations": []
+      },
+      "documentation": {
+        "url": "https://developers.google.com/drive/api/v3/reference",
+        "relevantSections": [
+          "Files: create (upload)",
+          "Files: create (folders)",
+          "Manage uploads (resumable for >5MB)",
+          "Choose scopes (drive.file vs drive)"
+        ]
+      },
+      "patterns": [
+        {
+          "name": "Upload File",
+          "description": "files.create com requestBody (metadata) + media (stream). Retorna id + webViewLink",
+          "codeExample": "drive.files.create({ requestBody: { name, parents: [folderId] }, media: { body: fs.createReadStream(path) } })"
+        },
+        {
+          "name": "Create Folder",
+          "description": "files.create com mimeType 'application/vnd.google-apps.folder'",
+          "codeExample": "drive.files.create({ requestBody: { name: 'Pasta', mimeType: 'application/vnd.google-apps.folder' } })"
+        },
+        {
+          "name": "Resumable Upload",
+          "description": "Para arquivos >5MB. Iniciar sessão → upload em chunks de 256KB",
+          "codeExample": "POST googleapis.com/upload/drive/v3/files?uploadType=resumable"
+        }
+      ],
+      "compatibility": {
+        "preferred": true,
+        "alternatives": [],
+        "conflicts": []
+      },
+      "keyFindings": {
+        "scope": "drive.file é RECOMENDADO (acesso apenas a arquivos criados pelo app, não requer verificação Google)",
+        "rateLimits": "20,000 queries/dia (default). 1000 requests/100s por usuário",
+        "fileOrganization": "Criar folder tree por tipo (imagens/, documentos/, etc.) + subfolders por mês"
+      }
+    },
+    {
+      "name": "Google Calendar API",
+      "type": "api",
+      "version": "v3",
+      "verified": true,
+      "source": "manual",
+      "existing": {
+        "installed": false,
+        "currentVersion": null,
+        "usageLocations": []
+      },
+      "documentation": {
+        "url": "https://developers.google.com/calendar/api/v3/reference",
+        "relevantSections": [
+          "Events: insert (criar evento)",
+          "Events: delete (cancelar)",
+          "Events: list (listar próximos)",
+          "conferenceData (Google Meet)"
+        ]
+      },
+      "patterns": [
+        {
+          "name": "Create Event with Meet",
+          "description": "events.insert com conferenceData + conferenceDataVersion:1. Meet link em response.conferenceData.entryPoints[0].uri",
+          "codeExample": "calendar.events.insert({ calendarId: 'primary', conferenceDataVersion: 1, requestBody: { summary, start, end, conferenceData: { createRequest: { requestId: `meet-${Date.now()}`, conferenceSolutionKey: { type: 'hangoutsMeet' } } } } })"
+        },
+        {
+          "name": "Delete Event with Notification",
+          "description": "events.delete com sendUpdates:'all' para notificar participantes",
+          "codeExample": "calendar.events.delete({ calendarId: 'primary', eventId, sendUpdates: 'all' })"
+        },
+        {
+          "name": "List Upcoming Events",
+          "description": "events.list com timeMin, singleEvents:true, orderBy:'startTime'",
+          "codeExample": "calendar.events.list({ calendarId: 'primary', timeMin: new Date().toISOString(), singleEvents: true, orderBy: 'startTime' })"
+        }
+      ],
+      "compatibility": {
+        "preferred": true,
+        "alternatives": [],
+        "conflicts": []
+      },
+      "keyFindings": {
+        "meetLink": "Google Meet NÃO tem API standalone. Links são gerados via Calendar API conferenceData",
+        "criticalParam": "conferenceDataVersion: 1 é OBRIGATÓRIO para criar Meet links",
+        "rateLimits": "1,000,000 queries/dia. 5 requests/segundo por usuário",
+        "timezone": "Sempre especificar timeZone: 'America/Sao_Paulo'"
+      }
+    },
+    {
+      "name": "Gmail API / Nodemailer",
+      "type": "api",
+      "version": "v1 (Gmail) / ^6.9 (Nodemailer)",
+      "verified": true,
+      "source": "manual",
+      "existing": {
+        "installed": false,
+        "currentVersion": null,
+        "usageLocations": []
+      },
+      "documentation": {
+        "url": "https://developers.google.com/gmail/api/reference/rest",
+        "relevantSections": [
+          "Users.messages: send",
+          "MIME message format",
+          "Nodemailer OAuth2 transport"
+        ]
+      },
+      "patterns": [
+        {
+          "name": "Send Email via Nodemailer (Recomendado)",
+          "description": "Nodemailer com OAuth2 transport é mais simples que Gmail API raw. Suporta HTML e anexos nativamente.",
+          "codeExample": "nodemailer.createTransport({ service: 'gmail', auth: { type: 'OAuth2', user, clientId, clientSecret, refreshToken, accessToken } })"
+        },
+        {
+          "name": "Send Email via Gmail API",
+          "description": "Criar MIME message manualmente, base64url encode, users.messages.send",
+          "codeExample": "gmail.users.messages.send({ userId: 'me', requestBody: { raw: base64urlEncodedMime } })"
+        }
+      ],
+      "compatibility": {
+        "preferred": true,
+        "alternatives": ["SendGrid", "Resend", "AWS SES"],
+        "conflicts": []
+      },
+      "keyFindings": {
+        "recommendation": "Usar Nodemailer com OAuth2 para simplicidade. Gmail API para controle avançado.",
+        "rateLimits": "~100 emails/dia (conta gratuita), 2000/dia (Google Workspace)",
+        "sendUpdates": "Calendar API com sendUpdates:'all' já envia convites por email automaticamente — Gmail API pode ser redundante para convites de reunião"
+      }
+    },
+    {
+      "name": "OpenAI GPT API (Chat Completions)",
+      "type": "api",
+      "version": "gpt-4o-mini (recomendado para NLU)",
+      "verified": true,
+      "source": "manual",
+      "existing": {
+        "installed": false,
+        "currentVersion": null,
+        "usageLocations": []
+      },
+      "documentation": {
+        "url": "https://platform.openai.com/docs/api-reference/chat",
+        "relevantSections": [
+          "Chat Completions (create)",
+          "Function Calling / Tool Use",
+          "Structured Outputs (strict: true)",
+          "Rate Limits & Usage Tiers"
+        ]
+      },
+      "patterns": [
+        {
+          "name": "Intent Classification with Structured Output",
+          "description": "Function calling com strict:true para extrair intent + entities (data, hora, título, participantes) de mensagens em pt-BR",
+          "codeExample": "openai.chat.completions.create({ model: 'gpt-4o-mini', tools: [{ type: 'function', function: { name: 'extract_intent', strict: true, parameters: schema } }], tool_choice: { type: 'function', function: { name: 'extract_intent' } } })"
+        },
+        {
+          "name": "System Prompt para pt-BR",
+          "description": "System prompt com contexto cultural brasileiro: interpretar 'amanhã', 'próxima segunda', 'daqui 2 dias', horário comercial 9-18h",
+          "codeExample": "{ role: 'system', content: 'Você é um assistente pessoal. Interprete datas relativas em pt-BR...' }"
+        }
+      ],
+      "compatibility": {
+        "preferred": true,
+        "alternatives": ["Claude API (Anthropic)", "Google Gemini", "Llama (local)"],
+        "conflicts": []
+      },
+      "keyFindings": {
+        "modelRecommendation": "GPT-4o-mini para intent classification — 16x mais barato que GPT-4o, desempenho suficiente para NLU",
+        "pricing": "GPT-4o-mini: $0.15/1M input, $0.60/1M output. GPT-4o: $2.50/1M input, $10/1M output",
+        "costEstimate": "~1000 msgs/dia × ~200 tokens/msg ≈ $1.80/mês (gpt-4o-mini)",
+        "structuredOutputs": "100% schema adherence com strict:true — elimina necessidade de retry por JSON inválido",
+        "caching": "50% desconto em input tokens para system prompts repetidos (automático)"
+      }
+    },
+    {
+      "name": "OpenAI Whisper API",
+      "type": "api",
+      "version": "whisper-1 / gpt-4o-mini-transcribe",
+      "verified": true,
+      "source": "manual",
+      "existing": {
+        "installed": false,
+        "currentVersion": null,
+        "usageLocations": []
+      },
+      "documentation": {
+        "url": "https://platform.openai.com/docs/api-reference/audio/createTranscription",
+        "relevantSections": [
+          "Audio Transcription (create)",
+          "Supported formats",
+          "Language parameter"
+        ]
+      },
+      "patterns": [
+        {
+          "name": "Transcribe WhatsApp Audio",
+          "description": "WhatsApp envia OGG/Opus. Converter para MP3 com ffmpeg antes de enviar ao Whisper. Especificar language:'pt'.",
+          "codeExample": "openai.audio.transcriptions.create({ file: fs.createReadStream(mp3Path), model: 'whisper-1', language: 'pt' })"
+        },
+        {
+          "name": "Opus→MP3 Conversion",
+          "description": "Usar fluent-ffmpeg para converter OGG/Opus do WhatsApp para MP3 (formato suportado pelo Whisper)",
+          "codeExample": "ffmpeg(opusPath).toFormat('mp3').save(mp3Path)"
+        }
+      ],
+      "compatibility": {
+        "preferred": true,
+        "alternatives": ["Google Cloud Speech-to-Text", "Azure Speech", "Whisper self-hosted"],
+        "conflicts": []
+      },
+      "keyFindings": {
+        "opusSupport": "OGG container suportado, mas Opus codec NÃO oficialmente listado. Converter para MP3 é RECOMENDADO.",
+        "ptBRQuality": "WER 8-15% para português — boa acurácia, especificar language:'pt' melhora resultado",
+        "pricing": "whisper-1: $0.006/min. gpt-4o-mini-transcribe: $0.003/min (50% mais barato)",
+        "fileLimits": "Máximo 25MB por arquivo",
+        "costEstimate": "~50 min áudio/dia ≈ $4.50/mês (gpt-4o-mini-transcribe)",
+        "ffmpegDependency": "Requer ffmpeg instalado no servidor para conversão de formato"
+      }
+    },
+    {
+      "name": "googleapis",
+      "type": "library",
+      "version": "^134.0.0",
+      "verified": true,
+      "source": "manual",
+      "existing": {
+        "installed": false,
+        "currentVersion": null,
+        "usageLocations": []
+      },
+      "documentation": {
+        "url": "https://www.npmjs.com/package/googleapis",
+        "relevantSections": ["Setup", "Authentication", "Drive v3", "Calendar v3", "Gmail v1"]
+      },
+      "patterns": [
+        {
+          "name": "Service Clients",
+          "description": "Criar clients tipados para cada API Google",
+          "codeExample": "const drive = google.drive({ version: 'v3', auth }); const calendar = google.calendar({ version: 'v3', auth });"
+        }
+      ],
+      "compatibility": {
+        "preferred": true,
+        "alternatives": [],
+        "conflicts": []
+      }
+    },
+    {
+      "name": "openai",
+      "type": "library",
+      "version": "^4.x",
+      "verified": true,
+      "source": "manual",
+      "existing": {
+        "installed": false,
+        "currentVersion": null,
+        "usageLocations": []
+      },
+      "documentation": {
+        "url": "https://www.npmjs.com/package/openai",
+        "relevantSections": ["Chat Completions", "Audio Transcription", "Error Handling"]
+      },
+      "patterns": [
+        {
+          "name": "Client Setup",
+          "description": "Auto-reads OPENAI_API_KEY. Built-in retry (maxRetries), timeout, TypeScript support.",
+          "codeExample": "const openai = new OpenAI({ maxRetries: 3, timeout: 30000 });"
+        }
+      ],
+      "compatibility": {
+        "preferred": true,
+        "alternatives": [],
+        "conflicts": []
+      }
+    },
+    {
+      "name": "nodemailer",
+      "type": "library",
+      "version": "^6.9.x",
+      "verified": true,
+      "source": "manual",
+      "existing": {
+        "installed": false,
+        "currentVersion": null,
+        "usageLocations": []
+      },
+      "documentation": {
+        "url": "https://nodemailer.com/smtp/oauth2/",
+        "relevantSections": ["OAuth2 transport", "Gmail integration"]
+      },
+      "patterns": [
+        {
+          "name": "Gmail OAuth2 Transport",
+          "description": "Usar OAuth2 credentials do Google para enviar emails via Gmail sem senha",
+          "codeExample": "nodemailer.createTransport({ service: 'gmail', auth: { type: 'OAuth2', user, clientId, clientSecret, refreshToken } })"
+        }
+      ],
+      "compatibility": {
+        "preferred": true,
+        "alternatives": ["Gmail API raw", "SendGrid", "Resend"],
+        "conflicts": []
+      }
+    },
+    {
+      "name": "fluent-ffmpeg",
+      "type": "library",
+      "version": "^2.1.x",
+      "verified": true,
+      "source": "manual",
+      "existing": {
+        "installed": false,
+        "currentVersion": null,
+        "usageLocations": []
+      },
+      "documentation": {
+        "url": "https://www.npmjs.com/package/fluent-ffmpeg",
+        "relevantSections": ["Audio conversion", "Format options"]
+      },
+      "patterns": [
+        {
+          "name": "Opus to MP3 Conversion",
+          "description": "Converter áudio OGG/Opus do WhatsApp para MP3 antes de enviar ao Whisper",
+          "codeExample": "ffmpeg(inputPath).toFormat('mp3').audioBitrate(128).save(outputPath)"
+        }
+      ],
+      "compatibility": {
+        "preferred": true,
+        "alternatives": ["prism-media", "node-opus"],
+        "conflicts": []
+      },
+      "keyFindings": {
+        "systemDependency": "Requer ffmpeg binário instalado no sistema (apt-get install ffmpeg / brew install ffmpeg)"
+      }
+    },
+    {
+      "name": "axios",
+      "type": "library",
+      "version": "^1.6.x",
+      "verified": true,
+      "source": "manual",
+      "existing": {
+        "installed": false,
+        "currentVersion": null,
+        "usageLocations": []
+      },
+      "documentation": {
+        "url": "https://www.npmjs.com/package/axios",
+        "relevantSections": ["Request config", "Response schema", "Interceptors"]
+      },
+      "patterns": [
+        {
+          "name": "WhatsApp API Client",
+          "description": "Chamadas REST para WhatsApp Cloud API com bearer token",
+          "codeExample": "axios.post(url, data, { headers: { Authorization: `Bearer ${token}` } })"
+        }
+      ],
+      "compatibility": {
+        "preferred": true,
+        "alternatives": ["node-fetch", "got", "ky"],
+        "conflicts": []
+      }
+    },
+    {
+      "name": "express",
+      "type": "library",
+      "version": "^4.18.x",
+      "verified": true,
+      "source": "manual",
+      "existing": {
+        "installed": false,
+        "currentVersion": null,
+        "usageLocations": []
+      },
+      "documentation": {
+        "url": "https://expressjs.com/",
+        "relevantSections": ["Routing", "Middleware", "Error handling"]
+      },
+      "patterns": [
+        {
+          "name": "Webhook Server",
+          "description": "Express para receber webhooks do WhatsApp (GET verify + POST messages)",
+          "codeExample": "app.get('/webhook', verify); app.post('/webhook', handleMessage);"
+        }
+      ],
+      "compatibility": {
+        "preferred": true,
+        "alternatives": ["Fastify", "Hono", "Koa"],
+        "conflicts": []
+      }
+    }
+  ],
+
+  "unverifiedClaims": [
+    {
+      "claim": "WhatsApp SDK oficial da Meta (npm: whatsapp) está ativamente mantido e pronto para produção",
+      "reason": "Repositório existe mas status de manutenção pode variar. Abordagem manual com axios é mais confiável.",
+      "action": "acceptable_risk"
+    },
+    {
+      "claim": "Opus codec do WhatsApp é diretamente transcrito pelo Whisper sem conversão",
+      "reason": "OGG container é listado como suportado, mas Opus codec especificamente não é confirmado. Conversão para MP3 é mais segura.",
+      "action": "needs_validation"
+    },
+    {
+      "claim": "Google Calendar sendUpdates:'all' envia convites automaticamente — pode tornar Gmail API desnecessária para convites",
+      "reason": "Calendar API envia emails de convite nativos do Google Calendar. Mas o projeto precisa de convites via WhatsApp também, então a funcionalidade de envio de mensagens é necessária de qualquer forma.",
+      "action": "acceptable_risk"
+    }
+  ],
+
+  "recommendations": [
+    {
+      "type": "prefer",
+      "subject": "gpt-4o-mini sobre gpt-4o",
+      "rationale": "16x mais barato, suficiente para NLU/intent classification em pt-BR. Custo estimado ~$1.80/mês vs ~$30/mês"
+    },
+    {
+      "type": "prefer",
+      "subject": "gpt-4o-mini-transcribe sobre whisper-1",
+      "rationale": "50% mais barato ($0.003/min vs $0.006/min) para transcrição. Custo estimado ~$4.50/mês vs $9/mês"
+    },
+    {
+      "type": "prefer",
+      "subject": "Nodemailer OAuth2 sobre Gmail API raw",
+      "rationale": "Muito mais simples para envio de emails. Gmail API raw requer MIME manual. Nodemailer suporta HTML/anexos nativamente"
+    },
+    {
+      "type": "prefer",
+      "subject": "drive.file scope sobre drive scope",
+      "rationale": "Mais seguro (acesso apenas a arquivos do app), não requer verificação Google, gera mais confiança do usuário"
+    },
+    {
+      "type": "prefer",
+      "subject": "axios + implementação manual sobre WhatsApp SDK",
+      "rationale": "Controle total, sem dependência de SDK que pode ficar desatualizado. REST API do WhatsApp é simples."
+    },
+    {
+      "type": "consider",
+      "subject": "Calendar sendUpdates para convites por email",
+      "rationale": "Calendar API com sendUpdates:'all' envia convites Google Calendar nativos. Pode substituir Gmail API para convites de reunião, reduzindo complexidade."
+    },
+    {
+      "type": "consider",
+      "subject": "ffmpeg como system dependency",
+      "rationale": "fluent-ffmpeg requer ffmpeg instalado. Precisa ser incluído no Dockerfile/setup do servidor. Alternativa: converter no browser antes do upload."
+    },
+    {
+      "type": "avoid",
+      "subject": "Self-hosting Whisper",
+      "rationale": "Custo-benefício ruim para volume pessoal (<500h/mês). API é $4.50/mês vs ~$276/mês para GPU instance"
+    }
+  ],
+
+  "monthlyCostEstimate": {
+    "openai_gpt4o_mini": "$1.80 (1000 msgs/dia × 200 tokens)",
+    "openai_whisper": "$4.50 (50 min áudio/dia)",
+    "whatsapp_api": "$0.00 (mensagens de serviço dentro janela 24h são gratuitas)",
+    "google_apis": "$0.00 (quotas gratuitas suficientes para uso pessoal)",
+    "total": "~$6.30/mês em APIs"
+  },
+
+  "researchNotes": "Pesquisa abrangente cobrindo 7 APIs e 6 bibliotecas npm. Todas as dependências são verificadas, bem documentadas e compatíveis com Node.js/TypeScript. Maior risco técnico: (1) conversão Opus→MP3 para Whisper, (2) verificação Meta Business para produção. Custo mensal estimado de ~$6.30 é muito viável para uso pessoal. A arquitetura recomendada usa Express + axios (WhatsApp), googleapis (Google), openai (GPT + Whisper), nodemailer (email), fluent-ffmpeg (áudio)."
+}
