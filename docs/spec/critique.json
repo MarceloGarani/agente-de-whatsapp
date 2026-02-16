@@ -1,0 +1,188 @@
+{
+  "storyId": "EPIC-1",
+  "critiquedAt": "2026-02-16T14:30:00.000Z",
+  "critiquedBy": "@qa",
+  "specVersion": 1,
+
+  "verdict": "NEEDS_REVISION",
+  "verdictReason": "Spec é sólida em accuracy e alignment, mas possui lacuna significativa na camada de persistência/banco de dados — 7 entidades do domínio definidas sem nenhum arquivo ou estratégia de data layer na arquitetura. NFR-1 (latência <30s) carece de abordagem técnica concreta. Média ponderada 3.90 (abaixo do threshold 4.0 para APPROVED).",
+
+  "scores": {
+    "accuracy": 4,
+    "completeness": 3,
+    "consistency": 4,
+    "feasibility": 4,
+    "alignment": 5,
+    "average": 3.90
+  },
+
+  "issues": [
+    {
+      "id": "CRIT-1",
+      "severity": "MEDIUM",
+      "category": "completeness",
+      "check": "comp-4",
+      "description": "Camada de persistência/banco de dados completamente ausente da arquitetura e file list. O domainModel em requirements.json define 7 entidades (User, Conversation, FileUpload, CalendarEvent, Meeting, Participant, Reminder) e complexity.json menciona '7 tabelas', mas o spec.md não inclui nenhum arquivo de data access, repository, migration ou schema. Sem persistência, lembretes (FR-7), histórico de conversas (DM-2), e status de convites (DM-6) não podem funcionar.",
+      "location": "spec.md#section-3 (Technical Approach) e spec.md#section-5 (Files)",
+      "suggestion": "Adicionar camada de persistência: (1) src/database/connection.ts, (2) src/database/schema.ts ou migrations/, (3) src/repositories/ para cada entidade. Mesmo sem decidir a tecnologia (OQ-2), o spec deve definir que um data layer é necessário e listar os arquivos conceituais. Sugestão: usar SQLite para v1 (zero config, file-based) com migration path para PostgreSQL.",
+      "autoFixable": true
+    },
+    {
+      "id": "CRIT-2",
+      "severity": "MEDIUM",
+      "category": "accuracy",
+      "check": "acc-4",
+      "description": "NFR-1 (latência <30s) não tem abordagem técnica concreta na seção de arquitetura. É mencionado apenas na seção de Riscos (R6) como problema potencial, mas sem solução arquitetural definida (ex: timeout configs, async processing, message queue, early response pattern).",
+      "location": "spec.md#section-3 (Technical Approach)",
+      "suggestion": "Adicionar na seção 3.1 ou 3.3: (1) Resposta imediata '200 OK' ao webhook + processamento async, (2) Mensagem 'processando...' enviada em <2s, (3) Timeout de 25s para chamadas externas com fallback de notificação de erro. O pattern de 'respond 200 immediately' já está no research.json (WhatsApp webhook pattern) mas não está explícito no spec como estratégia de performance.",
+      "autoFixable": true
+    },
+    {
+      "id": "CRIT-3",
+      "severity": "MEDIUM",
+      "category": "completeness",
+      "check": "comp-3",
+      "description": "Dependência de scheduling library ausente. A arquitetura menciona 'Reminder Scheduler (cron/interval)' e o componente reminder.scheduler.ts, mas nenhum pacote npm de scheduling é listado nas dependências (ex: node-cron, node-schedule, agenda). Também não está documentado se será usado setInterval nativo.",
+      "location": "spec.md#section-4.2 (npm Dependencies)",
+      "suggestion": "Adicionar 'node-cron ^3.x' ou similar à lista de dependências npm. Alternativa: documentar que será usado setInterval/setTimeout nativo com justificativa (simplicidade para v1 single-user).",
+      "autoFixable": true
+    },
+    {
+      "id": "CRIT-4",
+      "severity": "LOW",
+      "category": "consistency",
+      "check": "con-2",
+      "description": "GOOGLE_REFRESH_TOKEN listado em .env (seção 10) sugere armazenamento em plaintext, o que contradiz parcialmente NFR-4 ('tokens OAuth armazenados com segurança'). Para v1 single-user é aceitável, mas a inconsistência deve ser documentada.",
+      "location": "spec.md#section-10 (Environment Variables)",
+      "suggestion": "Adicionar nota na seção 10 reconhecendo que .env é solução v1 e que OQ-3 (@architect) definirá armazenamento seguro. Alternativa para v1: .env com permissões restritivas (chmod 600).",
+      "autoFixable": true
+    },
+    {
+      "id": "CRIT-5",
+      "severity": "LOW",
+      "category": "completeness",
+      "check": "comp-5",
+      "description": "Sem estratégia de logging/observabilidade para um sistema com 7+ APIs externas. Quando uma API falha (NFR-3), o diagnóstico depende de logs estruturados. Nenhum arquivo de logging utility ou dependência (winston, pino) é mencionado.",
+      "location": "spec.md#section-4.2 e spec.md#section-5",
+      "suggestion": "Adicionar dependência de logging (pino ou winston) e arquivo src/utils/logger.ts. Para v1, console.log estruturado pode ser suficiente — documentar a decisão.",
+      "autoFixable": true
+    },
+    {
+      "id": "CRIT-6",
+      "severity": "LOW",
+      "category": "consistency",
+      "check": "con-2",
+      "description": "OQ-6 identifica que Calendar API sendUpdates:'all' já envia convites por email, tornando Gmail API/Nodemailer potencialmente redundante para convites de reunião. Porém, o spec inclui email.service.ts como componente core sem notar essa sobreposição. Pode resultar em convites duplicados.",
+      "location": "spec.md#section-3.2 (email.service.ts) e spec.md#section-8 (OQ-6)",
+      "suggestion": "Adicionar nota no componente email.service.ts indicando que pode ser simplificado/removido se Calendar sendUpdates for suficiente (OQ-6). Resolver OQ-6 antes da implementação do Epic C.",
+      "autoFixable": false
+    },
+    {
+      "id": "CRIT-7",
+      "severity": "LOW",
+      "category": "completeness",
+      "check": "comp-4",
+      "description": "Sem arquivo de error handling centralizado. A complexidade do sistema (7 APIs) demanda tratamento de erro consistente. O componente não está listado em seção 5.",
+      "location": "spec.md#section-5 (Files to Create)",
+      "suggestion": "Adicionar src/utils/error-handler.ts para tratamento padronizado de erros de API (retry logic, user notification, logging).",
+      "autoFixable": true
+    }
+  ],
+
+  "summary": {
+    "highIssues": 0,
+    "mediumIssues": 3,
+    "lowIssues": 4,
+    "autoFixable": 6
+  },
+
+  "dimensionDetails": {
+    "accuracy": {
+      "score": 4,
+      "checks": {
+        "acc-1": { "result": "PASS", "notes": "Todos os 8 FRs cobertos na spec com seções dedicadas" },
+        "acc-2": { "result": "PASS", "notes": "Nenhum requisito fantasma — Traceability Matrix válida, Article IV respeitado" },
+        "acc-3": { "result": "PASS", "notes": "P0 requirements proeminentes, P1 adequadamente secundários" },
+        "acc-4": { "result": "PARTIAL", "notes": "NFR-1 (latência) sem abordagem técnica concreta; NFR-4 (segurança tokens) delegada como OQ-3" }
+      }
+    },
+    "completeness": {
+      "score": 3,
+      "checks": {
+        "comp-1": { "result": "PASS", "notes": "Todas as 11 seções presentes e preenchidas" },
+        "comp-2": { "result": "PASS", "notes": "8 Gherkin scenarios cobrindo todos os FRs + unit + integration tests" },
+        "comp-3": { "result": "PARTIAL", "notes": "Scheduling library ausente das dependências npm" },
+        "comp-4": { "result": "FAIL", "notes": "Camada de persistência inteiramente ausente (0 arquivos de banco/repository para 7 entidades)" },
+        "comp-5": { "result": "PASS", "notes": "7 riscos documentados com mitigações" }
+      }
+    },
+    "consistency": {
+      "score": 4,
+      "checks": {
+        "con-1": { "result": "PASS", "notes": "Todas as referências FR-*/NFR-*/CON-* válidas" },
+        "con-2": { "result": "PARTIAL", "notes": "Scheduling dep faltando; token storage inconsistente com NFR-4; email.service vs OQ-6" },
+        "con-3": { "result": "PASS", "notes": "Profundidade da spec compatível com COMPLEX (23/25)" },
+        "con-4": { "result": "PASS", "notes": "Sem contradições diretas entre seções" }
+      }
+    },
+    "feasibility": {
+      "score": 4,
+      "checks": {
+        "feas-1": { "result": "PASS", "notes": "Todas as 13 dependências verificadas no research.json" },
+        "feas-2": { "result": "PASS", "notes": "Arquitetura Express + REST APIs é well-established e achievable" },
+        "feas-3": { "result": "PASS", "notes": "Escopo de epic dividido em 4 sub-epics de ~1 semana cada" },
+        "feas-4": { "result": "PASS", "notes": "Nenhum requisito impossível identificado" }
+      }
+    },
+    "alignment": {
+      "score": 5,
+      "checks": {
+        "align-1": { "result": "PASS", "notes": "Node.js/TS conforme CON-1, bibliotecas mainstream" },
+        "align-2": { "result": "PASS", "notes": "Projeto greenfield — patterns escolhidos são standard Node.js" },
+        "align-3": { "result": "PASS", "notes": "Nomes kebab-case consistentes, pattern {name}.service.ts" },
+        "align-4": { "result": "PASS", "notes": "Greenfield — sem conflitos com arquitetura existente" }
+      }
+    }
+  },
+
+  "nextAction": "Retornar ao @pm para revisão (spec-write) com as 7 issues. Foco principal: adicionar camada de persistência (CRIT-1), abordagem de performance para NFR-1 (CRIT-2), e scheduling dependency (CRIT-3). Issues LOW são auto-fixáveis.",
+
+  "autoFixes": [
+    {
+      "issueId": "CRIT-1",
+      "location": "spec.md#section-5.1",
+      "original": "(sem arquivos de database)",
+      "suggested": "Adicionar: src/database/connection.ts, src/database/schema.ts, src/repositories/user.repository.ts (ou repository genérico). Adicionar nota em seção 3.1 sobre data layer."
+    },
+    {
+      "issueId": "CRIT-2",
+      "location": "spec.md#section-3.1",
+      "original": "(sem abordagem de performance)",
+      "suggested": "Adicionar subsection '3.4 Performance Strategy': (1) Webhook responde 200 imediatamente, (2) Processamento async, (3) Mensagem 'processando...' em <2s, (4) Timeout 25s para APIs externas."
+    },
+    {
+      "issueId": "CRIT-3",
+      "location": "spec.md#section-4.2",
+      "original": "(sem scheduling package)",
+      "suggested": "Adicionar: | node-cron | ^3.x | Scheduler para lembretes periódicos | ✅ |"
+    },
+    {
+      "issueId": "CRIT-4",
+      "location": "spec.md#section-10",
+      "original": "GOOGLE_REFRESH_TOKEN=          # Armazenado apos primeira autorizacao",
+      "suggested": "GOOGLE_REFRESH_TOKEN=          # v1: .env (OQ-3 definirá solução segura)"
+    },
+    {
+      "issueId": "CRIT-5",
+      "location": "spec.md#section-4.2 e section-5.1",
+      "original": "(sem logging dependency/file)",
+      "suggested": "Dep: | pino | ^8.x | Structured logging | ✅ | File: src/utils/logger.ts"
+    },
+    {
+      "issueId": "CRIT-7",
+      "location": "spec.md#section-5.1",
+      "original": "(sem error handler file)",
+      "suggested": "Adicionar: | src/utils/error-handler.ts | Tratamento padronizado de erros de API | NFR-3, EC-1, EC-2 |"
+    }
+  ]
+}

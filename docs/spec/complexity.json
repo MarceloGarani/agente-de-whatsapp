@@ -1,0 +1,83 @@
+{
+  "storyId": "EPIC-1",
+  "assessedAt": "2026-02-16T12:30:00.000Z",
+  "assessedBy": "@architect",
+
+  "result": "COMPLEX",
+  "overridden": false,
+
+  "dimensions": {
+    "scope": {
+      "score": 5,
+      "notes": "Projeto greenfield com 25-35 arquivos estimados: webhook handler, message router, intent classifier, audio transcriber, 5 serviços de integração (Drive, Calendar, Meet, Gmail, WhatsApp), reminder scheduler, 7 modelos de banco, auth/OAuth module, config, error handling. Arquitetura inteira criada do zero."
+    },
+    "integration": {
+      "score": 5,
+      "notes": "7 APIs externas: WhatsApp Business (webhook bidirecional), Google Drive, Calendar, Meet (via Calendar conferenceData), Gmail, OpenAI GPT, Whisper. OAuth 2.0 compartilhado entre 4 APIs Google. Orquestração complexa — uma mensagem pode acionar Calendar + Meet + Gmail + WhatsApp em sequência."
+    },
+    "infrastructure": {
+      "score": 5,
+      "notes": "Infraestrutura completa do zero: servidor Node.js/TS, banco de dados (7 tabelas), endpoint HTTPS público para webhook WhatsApp, OAuth redirect endpoint, background scheduler para lembretes, armazenamento seguro de tokens, hosting com SSL."
+    },
+    "knowledge": {
+      "score": 4,
+      "notes": "Múltiplas APIs novas para o projeto: WhatsApp Business Cloud API, Google OAuth 2.0 + 4 APIs Google, OpenAI GPT + Whisper, webhook architecture, NLU/intent detection em pt-BR. Todas bem documentadas mas nenhuma presente no codebase atual. Curva de aprendizado moderada-alta."
+    },
+    "risk": {
+      "score": 4,
+      "notes": "Lida com dados pessoais (arquivos, agenda, contatos). Segurança crítica: OAuth tokens, API keys, mensagens privadas. Dependência de 6+ serviços externos. Custo financeiro por chamada OpenAI/Whisper. Meta Business verification pode bloquear projeto (ASM-3). Mitigado parcialmente por ser single-user v1."
+    }
+  },
+
+  "totalScore": 23,
+
+  "pipelinePhases": [
+    "gather",
+    "assess",
+    "research",
+    "spec",
+    "critique_1",
+    "revise",
+    "critique_2",
+    "plan"
+  ],
+
+  "flags": [
+    "COMPLEX: Requires architectural review before implementation",
+    "COMPLEX: Strongly recommend breaking into smaller stories/epics",
+    "COMPLEX: Consider spikes for WhatsApp Business API and Google OAuth integration",
+    "HIGH-INTEGRATION: 7 external APIs — implement integration layer with adapter pattern",
+    "HIGH-RISK: Meta Business verification (ASM-3) is blocking prerequisite — validate early",
+    "HIGH-RISK: Google OAuth security design needed before implementation (OQ-3)",
+    "COST-AWARENESS: OpenAI/Whisper API costs per message — monitor and set budgets"
+  ],
+
+  "estimatedEffort": "3+ semanas (recomendado dividir em 3-4 epics menores)",
+
+  "recommendedEpicBreakdown": [
+    {
+      "epic": "Epic A: Foundation & WhatsApp Integration",
+      "scope": "Server setup, WhatsApp webhook, message receiving/sending, basic intent classification",
+      "estimatedEffort": "1 semana",
+      "priority": "P0"
+    },
+    {
+      "epic": "Epic B: Google Integration & File Management",
+      "scope": "Google OAuth flow, Drive API upload, automatic folder organization",
+      "estimatedEffort": "1 semana",
+      "priority": "P0"
+    },
+    {
+      "epic": "Epic C: Calendar, Meetings & Meet",
+      "scope": "Calendar event CRUD, Meet link generation, Gmail invites, WhatsApp invites",
+      "estimatedEffort": "1 semana",
+      "priority": "P0"
+    },
+    {
+      "epic": "Epic D: Audio, Reminders & Polish",
+      "scope": "Whisper STT integration, automatic reminders scheduler, edge case handling, error resilience",
+      "estimatedEffort": "1 semana",
+      "priority": "P1"
+    }
+  ]
+}
