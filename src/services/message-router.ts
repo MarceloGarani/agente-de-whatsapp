@@ -5,6 +5,16 @@ import { uploadFile } from './drive.service.js';
 import { createEvent, deleteEvent, findEventsByTitle, resolveDateTime, formatDateTimeBR } from './calendar.service.js';
 import { sendMeetingInvite } from './email.service.js';
 import { transcribeAudio } from './audio-transcriber.js';
+import {
+  addMessage,
+  getHistoryForGPT,
+  setLastAction,
+  getLastAction,
+  setPendingUpload,
+  getPendingUpload,
+  clearPendingUpload,
+  cleanExpiredConversations,
+} from './conversation-store.js';
 import { messages } from '../utils/messages.js';
 import { Intent, MessageType } from '../types/index.js';
 import type { IncomingMessage, IntentResult, CalendarEvent } from '../types/index.js';
@@ -28,6 +38,19 @@ function cleanExpiredActions(): void {
       pendingActions.delete(key);
     }
   }
+  cleanExpiredConversations();
+}
+
+function getExtension(mimeType?: string): string {
+  if (!mimeType) return 'bin';
+  const map: Record<string, string> = {
+    'image/jpeg': 'jpg',
+    'image/png': 'png',
+    'image/webp': 'webp',
+    'application/pdf': 'pdf',
+    'audio/ogg': 'ogg',
+  };
+  return map[mimeType.split(';')[0]] || 'bin';
 }
 
 export async function routeMessage(message: IncomingMessage): Promise<void> {
@@ -42,7 +65,7 @@ export async function routeMessage(message: IncomingMessage): Promise<void> {
       break;
     case MessageType.DOCUMENT:
     case MessageType.IMAGE:
-      await handleFileUpload(message);
+      await handleFileMessage(message);
       break;
     default:
       await sendText(message.from, messages.errors.generic);
@@ -50,83 +73,41 @@ export async function routeMessage(message: IncomingMessage): Promise<void> {
   }
 }
 
+// --- Text Messages ---
+
 async function handleTextMessage(message: IncomingMessage): Promise<void> {
   cleanExpiredActions();
 
-  // Check for pending action response (cancel confirmation flow)
+  // Check for pending cancel action
   const pending = pendingActions.get(message.from);
   if (pending) {
     await handlePendingAction(message.from, message.text!, pending);
     return;
   }
 
-  const result = await classifyIntent(message.text!);
+  // Check for pending upload awaiting name/folder
+  const pendingUpload = getPendingUpload(message.from);
+  if (pendingUpload) {
+    await handlePendingUploadResponse(message.from, message.text!, pendingUpload);
+    return;
+  }
+
+  // Store user message and classify with history
+  addMessage(message.from, 'user', message.text!);
+  const history = getHistoryForGPT(message.from);
+  // Remove the last entry (current message) since classifyIntent adds it separately
+  const previousHistory = history.slice(0, -1);
+  const result = await classifyIntent(message.text!, previousHistory);
 
   logger.info(
     { service: 'message-router', action: 'route', intent: result.intent, confidence: result.confidence },
     `Routed intent: ${result.intent}`,
   );
 
-  if (result.intent === Intent.UPLOAD_ARQUIVO) {
-    await sendText(message.from, messages.prompts.uploadInstruction);
-    return;
-  }
-
-  if (result.intent === Intent.CRIAR_EVENTO) {
-    await handleCreateEvent(message.from, result);
-    return;
-  }
-
-  if (result.intent === Intent.CRIAR_REUNIAO) {
-    await handleCreateMeeting(message.from, result);
-    return;
-  }
-
-  if (result.intent === Intent.CANCELAR_EVENTO) {
-    await handleCancelEvent(message.from, result);
-    return;
-  }
-
-  await handleIntentAction(message.from, result.intent);
+  await dispatchIntent(message.from, result);
 }
 
-async function handleFileUpload(message: IncomingMessage): Promise<void> {
-  if (!message.mediaId) {
-    await sendText(message.from, messages.errors.generic);
-    return;
-  }
-
-  try {
-    await sendText(message.from, messages.processing.file);
-
-    const buffer = await downloadMedia(message.mediaId);
-
-    const filename = message.filename || `arquivo_${Date.now()}.${getExtension(message.mimeType)}`;
-    const mimeType = message.mimeType || 'application/octet-stream';
-
-    const result = await uploadFile(buffer, filename, mimeType);
-
-    const confirmation = messages.confirmations.fileUploaded
-      .replace('{filename}', result.filename)
-      .replace('{folderPath}', result.folderPath);
-
-    await sendText(message.from, confirmation);
-
-    logger.info(
-      { service: 'message-router', action: 'upload-complete', fileId: result.fileId, folderPath: result.folderPath },
-      `File uploaded: ${result.filename} → ${result.folderPath}`,
-    );
-  } catch (error) {
-    logger.error({ service: 'message-router', action: 'upload-failed', error }, 'File upload failed');
-
-    const err = error as { code?: string };
-    if (err.code === 'SERVICE_UNAVAILABLE' || err.code === 'AUTH_REQUIRED') {
-      await sendText(message.from, messages.errors.driveUnavailable);
-    } else {
-      await sendText(message.from, messages.errors.generic);
-    }
-  }
-}
+// --- Audio Messages ---
 
 async function handleAudioMessage(message: IncomingMessage): Promise<void> {
   if (!message.mediaId) {
@@ -150,52 +131,171 @@ async function handleAudioMessage(message: IncomingMessage): Promise<void> {
       `Audio transcribed, routing as text`,
     );
 
-    // Route transcribed text through the same text pipeline
-    const result = await classifyIntent(text);
+    addMessage(message.from, 'user', text);
+    const history = getHistoryForGPT(message.from);
+    const previousHistory = history.slice(0, -1);
+    const result = await classifyIntent(text, previousHistory);
 
     logger.info(
       { service: 'message-router', action: 'route', intent: result.intent, confidence: result.confidence, source: 'audio' },
       `Routed intent (from audio): ${result.intent}`,
     );
 
-    if (result.intent === Intent.UPLOAD_ARQUIVO) {
-      await sendText(message.from, messages.prompts.uploadInstruction);
-      return;
-    }
-
-    if (result.intent === Intent.CRIAR_EVENTO) {
-      await handleCreateEvent(message.from, result);
-      return;
-    }
-
-    if (result.intent === Intent.CRIAR_REUNIAO) {
-      await handleCreateMeeting(message.from, result);
-      return;
-    }
-
-    if (result.intent === Intent.CANCELAR_EVENTO) {
-      await handleCancelEvent(message.from, result);
-      return;
-    }
-
-    await handleIntentAction(message.from, result.intent);
+    await dispatchIntent(message.from, result);
   } catch (error) {
     logger.error({ service: 'message-router', action: 'audio-failed', error }, 'Audio processing failed');
     await sendText(message.from, messages.errors.whisperFailed);
   }
 }
 
-function getExtension(mimeType?: string): string {
-  if (!mimeType) return 'bin';
-  const map: Record<string, string> = {
-    'image/jpeg': 'jpg',
-    'image/png': 'png',
-    'image/webp': 'webp',
-    'application/pdf': 'pdf',
-    'audio/ogg': 'ogg',
-  };
-  return map[mimeType.split(';')[0]] || 'bin';
+// --- File Messages (Document / Image) ---
+
+async function handleFileMessage(message: IncomingMessage): Promise<void> {
+  if (!message.mediaId) {
+    await sendText(message.from, messages.errors.generic);
+    return;
+  }
+
+  try {
+    const buffer = await downloadMedia(message.mediaId);
+    const ext = getExtension(message.mimeType);
+    const mimeType = message.mimeType || 'application/octet-stream';
+
+    // If there's a caption, use GPT to extract filename/folder
+    if (message.text) {
+      addMessage(message.from, 'user', message.text);
+      const history = getHistoryForGPT(message.from);
+      const previousHistory = history.slice(0, -1);
+      const result = await classifyIntent(message.text, previousHistory);
+
+      const customName = result.entities.nomeArquivo;
+      const customFolder = result.entities.pastaDestino;
+      const filename = customName ? `${customName}.${ext}` : (message.filename || `arquivo_${Date.now()}.${ext}`);
+
+      await executeUpload(message.from, buffer, filename, mimeType, customFolder);
+      return;
+    }
+
+    // No caption — ask user for name and folder
+    setPendingUpload(message.from, {
+      buffer,
+      mimeType,
+      originalFilename: message.filename,
+    });
+
+    const response = 'Recebi seu arquivo! Como deseja salvar?\n\nMe diga o nome e a pasta, por exemplo:\n- "lindo na pasta fotos"\n- "relatorio mensal"\n- "salvar automatico" (organizo por tipo e data)';
+    await sendText(message.from, response);
+    addMessage(message.from, 'assistant', response);
+  } catch (error) {
+    logger.error({ service: 'message-router', action: 'file-failed', error }, 'File processing failed');
+    await sendText(message.from, messages.errors.generic);
+  }
 }
+
+async function handlePendingUploadResponse(
+  to: string,
+  text: string,
+  upload: { buffer: Buffer; mimeType: string; originalFilename?: string },
+): Promise<void> {
+  clearPendingUpload(to);
+
+  const ext = getExtension(upload.mimeType);
+
+  // Check for "automatic" save
+  const lowerText = text.toLowerCase().trim();
+  if (lowerText.includes('automatico') || lowerText.includes('automatica') || lowerText === 'sim') {
+    const filename = upload.originalFilename || `arquivo_${Date.now()}.${ext}`;
+    await executeUpload(to, upload.buffer, filename, upload.mimeType);
+    return;
+  }
+
+  // Use GPT to extract name/folder from response
+  addMessage(to, 'user', text);
+  const history = getHistoryForGPT(to);
+  const previousHistory = history.slice(0, -1);
+  const result = await classifyIntent(text, previousHistory);
+
+  const customName = result.entities.nomeArquivo;
+  const customFolder = result.entities.pastaDestino;
+  const filename = customName ? `${customName}.${ext}` : (upload.originalFilename || `arquivo_${Date.now()}.${ext}`);
+
+  await executeUpload(to, upload.buffer, filename, upload.mimeType, customFolder);
+}
+
+async function executeUpload(
+  to: string,
+  buffer: Buffer,
+  filename: string,
+  mimeType: string,
+  customFolder?: string,
+): Promise<void> {
+  try {
+    await sendText(to, messages.processing.file);
+
+    const result = await uploadFile(buffer, filename, mimeType, customFolder);
+
+    const confirmation = messages.confirmations.fileUploaded
+      .replace('{filename}', result.filename)
+      .replace('{folderPath}', result.folderPath);
+
+    await sendText(to, confirmation);
+    addMessage(to, 'assistant', confirmation);
+
+    setLastAction(to, 'file_uploaded', {
+      fileId: result.fileId,
+      filename: result.filename,
+      folderPath: result.folderPath,
+    });
+
+    logger.info(
+      { service: 'message-router', action: 'upload-complete', fileId: result.fileId, folderPath: result.folderPath },
+      `File uploaded: ${result.filename} → ${result.folderPath}`,
+    );
+  } catch (error) {
+    logger.error({ service: 'message-router', action: 'upload-failed', error }, 'File upload failed');
+
+    const err = error as { code?: string };
+    if (err.code === 'SERVICE_UNAVAILABLE' || err.code === 'AUTH_REQUIRED') {
+      await sendText(to, messages.errors.driveUnavailable);
+    } else {
+      await sendText(to, messages.errors.generic);
+    }
+  }
+}
+
+// --- Intent Dispatch ---
+
+async function dispatchIntent(to: string, result: IntentResult): Promise<void> {
+  switch (result.intent) {
+    case Intent.UPLOAD_ARQUIVO:
+      await sendText(to, messages.prompts.uploadInstruction);
+      addMessage(to, 'assistant', messages.prompts.uploadInstruction);
+      break;
+    case Intent.CRIAR_EVENTO:
+      await handleCreateEvent(to, result);
+      break;
+    case Intent.CRIAR_REUNIAO:
+      await handleCreateMeeting(to, result);
+      break;
+    case Intent.CANCELAR_EVENTO:
+      await handleCancelEvent(to, result);
+      break;
+    case Intent.REENVIAR_CONVITE:
+      await handleResendInvite(to, result);
+      break;
+    case Intent.AJUDA:
+      await sendText(to, messages.prompts.help);
+      addMessage(to, 'assistant', messages.prompts.help);
+      break;
+    case Intent.CLARIFICACAO:
+    default:
+      await sendText(to, messages.prompts.clarification);
+      addMessage(to, 'assistant', messages.prompts.clarification);
+      break;
+  }
+}
+
+// --- Create Event ---
 
 async function handleCreateEvent(to: string, result: IntentResult): Promise<void> {
   try {
@@ -217,6 +317,13 @@ async function handleCreateEvent(to: string, result: IntentResult): Promise<void
       .replace('{hora}', formatted.hora);
 
     await sendText(to, confirmation);
+    addMessage(to, 'assistant', confirmation);
+
+    setLastAction(to, 'event_created', {
+      eventId: event.eventId,
+      title: event.title,
+      startTime: event.startTime,
+    });
 
     logger.info(
       { service: 'message-router', action: 'event-created', eventId: event.eventId },
@@ -224,15 +331,11 @@ async function handleCreateEvent(to: string, result: IntentResult): Promise<void
     );
   } catch (error) {
     logger.error({ service: 'message-router', action: 'event-create-failed', error }, 'Failed to create event');
-
-    const err = error as { code?: string };
-    if (err.code === 'AUTH_REQUIRED') {
-      await sendText(to, messages.errors.calendarUnavailable);
-    } else {
-      await sendText(to, messages.errors.calendarUnavailable);
-    }
+    await sendText(to, messages.errors.calendarUnavailable);
   }
 }
+
+// --- Create Meeting ---
 
 async function handleCreateMeeting(to: string, result: IntentResult): Promise<void> {
   try {
@@ -259,6 +362,8 @@ async function handleCreateMeeting(to: string, result: IntentResult): Promise<vo
 
     // Send WhatsApp invites to phone participants
     const inviteResults: string[] = [];
+    const failedInvites: string[] = [];
+
     for (const p of phoneParticipants) {
       try {
         const meetStr = event.meetLink ? `\nLink Meet: ${event.meetLink}` : '';
@@ -269,19 +374,24 @@ async function handleCreateMeeting(to: string, result: IntentResult): Promise<vo
         await sendText(p.telefone!, inviteMsg);
         inviteResults.push(p.nome || p.telefone!);
       } catch {
-        inviteResults.push(`${p.nome || p.telefone!} (falha)`);
+        const name = p.nome || p.telefone!;
+        inviteResults.push(`${name} (falha no WhatsApp)`);
+        failedInvites.push(name);
       }
     }
 
-    // Send custom email invites (in addition to Google Calendar native invites)
+    // Send custom email invites
     for (const p of participants.filter((p) => p.email)) {
       try {
         if (event.meetLink) {
           await sendMeetingInvite(p.email!, title, event.meetLink, dateTimeStr);
         }
         inviteResults.push(p.nome || p.email!);
-      } catch {
-        inviteResults.push(`${p.nome || p.email!} (falha)`);
+      } catch (emailError) {
+        const name = p.nome || p.email!;
+        logger.error({ service: 'message-router', action: 'email-invite-failed', email: p.email, error: emailError }, `Email invite failed for ${p.email}`);
+        inviteResults.push(`${name} (falha no email)`);
+        failedInvites.push(p.email!);
       }
     }
 
@@ -295,6 +405,25 @@ async function handleCreateMeeting(to: string, result: IntentResult): Promise<vo
       .replace('{convites}', convitesStr);
 
     await sendText(to, confirmation);
+    addMessage(to, 'assistant', confirmation);
+
+    // If there were failures, offer to retry
+    if (failedInvites.length > 0) {
+      const retryMsg = `Alguns convites falharam. Voce pode me enviar outro email ou pedir para tentar novamente.`;
+      await sendText(to, retryMsg);
+      addMessage(to, 'assistant', retryMsg);
+    }
+
+    // Store action context for follow-ups
+    setLastAction(to, 'meeting_created', {
+      eventId: event.eventId,
+      title: event.title,
+      meetLink: event.meetLink,
+      startTime: event.startTime,
+      dateTimeStr,
+      failedInvites,
+      successInvites: inviteResults.filter(r => !r.includes('(falha')),
+    });
 
     logger.info(
       { service: 'message-router', action: 'meeting-created', eventId: event.eventId, meetLink: event.meetLink },
@@ -305,6 +434,68 @@ async function handleCreateMeeting(to: string, result: IntentResult): Promise<vo
     await sendText(to, messages.errors.calendarUnavailable);
   }
 }
+
+// --- Resend Invite (follow-up) ---
+
+async function handleResendInvite(to: string, result: IntentResult): Promise<void> {
+  const lastAction = getLastAction(to);
+
+  if (!lastAction || lastAction.type !== 'meeting_created') {
+    const response = 'Nao encontrei nenhuma reuniao recente para reenviar o convite. Crie uma reuniao primeiro.';
+    await sendText(to, response);
+    addMessage(to, 'assistant', response);
+    return;
+  }
+
+  const { title, meetLink, dateTimeStr } = lastAction.details as {
+    title: string;
+    meetLink?: string;
+    dateTimeStr: string;
+  };
+
+  if (!meetLink) {
+    const response = 'A reuniao nao tem link do Meet. Crie uma nova reuniao com participantes.';
+    await sendText(to, response);
+    addMessage(to, 'assistant', response);
+    return;
+  }
+
+  const participants = result.entities.participantes || [];
+  const inviteResults: string[] = [];
+
+  for (const p of participants) {
+    if (p.email) {
+      try {
+        await sendMeetingInvite(p.email, title as string, meetLink as string, dateTimeStr as string);
+        inviteResults.push(p.nome || p.email);
+      } catch (error) {
+        logger.error({ service: 'message-router', action: 'resend-email-failed', email: p.email, error }, `Resend failed for ${p.email}`);
+        inviteResults.push(`${p.nome || p.email} (falha)`);
+      }
+    }
+
+    if (p.telefone) {
+      try {
+        const meetStr = `\nLink Meet: ${meetLink}`;
+        const inviteMsg = messages.prompts.meetingInvite
+          .replace('{titulo}', title as string)
+          .replace('{dateTime}', dateTimeStr as string)
+          .replace('{meetLink}', meetStr);
+        await sendText(p.telefone, inviteMsg);
+        inviteResults.push(p.nome || p.telefone);
+      } catch {
+        inviteResults.push(`${p.nome || p.telefone} (falha)`);
+      }
+    }
+  }
+
+  const convitesStr = inviteResults.length > 0 ? inviteResults.join(', ') : 'nenhum participante identificado';
+  const confirmation = `Convites da reuniao "${title}" reenviados: ${convitesStr}`;
+  await sendText(to, confirmation);
+  addMessage(to, 'assistant', confirmation);
+}
+
+// --- Cancel Event ---
 
 async function handleCancelEvent(to: string, result: IntentResult): Promise<void> {
   try {
@@ -339,6 +530,7 @@ async function handleCancelEvent(to: string, result: IntentResult): Promise<void
         .replace('{data}', `${formatted.data} as ${formatted.hora}`);
 
       await sendText(to, prompt);
+      addMessage(to, 'assistant', prompt);
       return;
     }
 
@@ -359,14 +551,18 @@ async function handleCancelEvent(to: string, result: IntentResult): Promise<void
       .replace('{lista}', lista);
 
     await sendText(to, prompt);
+    addMessage(to, 'assistant', prompt);
   } catch (error) {
     logger.error({ service: 'message-router', action: 'cancel-event-failed', error }, 'Failed to cancel event');
     await sendText(to, messages.errors.calendarUnavailable);
   }
 }
 
+// --- Pending Cancel Actions ---
+
 async function handlePendingAction(to: string, text: string, pending: PendingAction): Promise<void> {
   pendingActions.delete(to);
+  addMessage(to, 'user', text);
 
   try {
     if (pending.type === 'cancel_confirm') {
@@ -377,6 +573,12 @@ async function handlePendingAction(to: string, text: string, pending: PendingAct
           .replace('{titulo}', pending.eventTitle!);
 
         await sendText(to, confirmation);
+        addMessage(to, 'assistant', confirmation);
+
+        setLastAction(to, 'event_cancelled', {
+          eventId: pending.eventId,
+          title: pending.eventTitle,
+        });
 
         logger.info(
           { service: 'message-router', action: 'event-cancelled', eventId: pending.eventId },
@@ -384,6 +586,7 @@ async function handlePendingAction(to: string, text: string, pending: PendingAct
         );
       } else {
         await sendText(to, messages.prompts.cancelDiscarded);
+        addMessage(to, 'assistant', messages.prompts.cancelDiscarded);
       }
       return;
     }
@@ -410,24 +613,11 @@ async function handlePendingAction(to: string, text: string, pending: PendingAct
         .replace('{data}', `${formatted.data} as ${formatted.hora}`);
 
       await sendText(to, prompt);
+      addMessage(to, 'assistant', prompt);
       return;
     }
   } catch (error) {
     logger.error({ service: 'message-router', action: 'pending-action-failed', error }, 'Failed to process pending action');
     await sendText(to, messages.errors.calendarUnavailable);
-  }
-}
-
-async function handleIntentAction(to: string, intent: Intent): Promise<void> {
-  switch (intent) {
-    case Intent.AJUDA:
-      await sendText(to, messages.prompts.help);
-      break;
-    case Intent.CLARIFICACAO:
-      await sendText(to, messages.prompts.clarification);
-      break;
-    default:
-      await sendText(to, messages.errors.generic);
-      break;
   }
 }

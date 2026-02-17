@@ -59,6 +59,17 @@ jest.mock('../../src/services/audio-transcriber', () => ({
   transcribeAudio: jest.fn(),
 }));
 
+jest.mock('../../src/services/conversation-store', () => ({
+  addMessage: jest.fn(),
+  getHistoryForGPT: jest.fn().mockReturnValue([]),
+  setLastAction: jest.fn(),
+  getLastAction: jest.fn().mockReturnValue(undefined),
+  setPendingUpload: jest.fn(),
+  getPendingUpload: jest.fn().mockReturnValue(undefined),
+  clearPendingUpload: jest.fn(),
+  cleanExpiredConversations: jest.fn(),
+}));
+
 import { routeMessage } from '../../src/services/message-router';
 import { sendText, sendProcessingMessage, downloadMedia } from '../../src/services/whatsapp.client';
 import { classifyIntent } from '../../src/services/intent-classifier';
@@ -67,6 +78,7 @@ import { createEvent, deleteEvent, findEventsByTitle, resolveDateTime, formatDat
 import { pendingActions } from '../../src/services/message-router';
 import { sendMeetingInvite } from '../../src/services/email.service';
 import { transcribeAudio } from '../../src/services/audio-transcriber';
+import { setPendingUpload, getPendingUpload, getLastAction, clearPendingUpload } from '../../src/services/conversation-store';
 import { Intent, MessageType } from '../../src/types/index';
 import { messages } from '../../src/utils/messages';
 
@@ -82,15 +94,21 @@ const mockDeleteEvent = deleteEvent as jest.MockedFunction<typeof deleteEvent>;
 const mockFindEventsByTitle = findEventsByTitle as jest.MockedFunction<typeof findEventsByTitle>;
 const mockSendMeetingInvite = sendMeetingInvite as jest.MockedFunction<typeof sendMeetingInvite>;
 const mockTranscribeAudio = transcribeAudio as jest.MockedFunction<typeof transcribeAudio>;
+const mockSetPendingUpload = setPendingUpload as jest.MockedFunction<typeof setPendingUpload>;
+const mockGetPendingUpload = getPendingUpload as jest.MockedFunction<typeof getPendingUpload>;
+const mockGetLastAction = getLastAction as jest.MockedFunction<typeof getLastAction>;
+const mockClearPendingUpload = clearPendingUpload as jest.MockedFunction<typeof clearPendingUpload>;
 
 describe('Message Router', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     pendingActions.clear();
+    mockGetPendingUpload.mockReturnValue(undefined);
+    mockGetLastAction.mockReturnValue(undefined);
   });
 
   describe('Text routing', () => {
-    it('routes TEXT message through intent classifier', async () => {
+    it('routes TEXT message through intent classifier with history', async () => {
       mockClassifyIntent.mockResolvedValue({
         intent: Intent.AJUDA,
         entities: {},
@@ -106,7 +124,7 @@ describe('Message Router', () => {
       });
 
       expect(mockSendProcessing).toHaveBeenCalledWith('5511999999999');
-      expect(mockClassifyIntent).toHaveBeenCalledWith('ajuda');
+      expect(mockClassifyIntent).toHaveBeenCalledWith('ajuda', expect.any(Array));
       expect(mockSendText).toHaveBeenCalledWith('5511999999999', messages.prompts.help);
     });
 
@@ -190,8 +208,14 @@ describe('Message Router', () => {
   });
 
   describe('File upload flow', () => {
-    it('uploads DOCUMENT and sends confirmation', async () => {
+    it('uploads DOCUMENT with caption using extracted name', async () => {
       mockDownloadMedia.mockResolvedValue(Buffer.from('pdf-content'));
+      mockClassifyIntent.mockResolvedValue({
+        intent: Intent.UPLOAD_ARQUIVO,
+        entities: { nomeArquivo: 'relatorio' },
+        confidence: 0.9,
+        rawText: 'salvar como relatorio',
+      });
       mockUploadFile.mockResolvedValue({
         fileId: 'file-123',
         webViewLink: 'https://drive.google.com/file/d/file-123/view',
@@ -205,33 +229,26 @@ describe('Message Router', () => {
         mediaId: 'doc-456',
         mimeType: 'application/pdf',
         filename: 'relatorio.pdf',
+        text: 'salvar como relatorio',
         timestamp: '1708100000',
       });
 
-      expect(mockSendProcessing).toHaveBeenCalledWith('5511999999999');
-      expect(mockSendText).toHaveBeenCalledWith('5511999999999', messages.processing.file);
       expect(mockDownloadMedia).toHaveBeenCalledWith('doc-456');
       expect(mockUploadFile).toHaveBeenCalledWith(
         expect.any(Buffer),
         'relatorio.pdf',
         'application/pdf',
+        undefined,
       );
 
       const confirmCall = mockSendText.mock.calls.find(
         call => typeof call[1] === 'string' && call[1].includes('relatorio.pdf'),
       );
       expect(confirmCall).toBeDefined();
-      expect(confirmCall![1]).toContain('documentos/02-2026/');
     });
 
-    it('uploads IMAGE and sends confirmation', async () => {
+    it('asks for name/folder when IMAGE has no caption', async () => {
       mockDownloadMedia.mockResolvedValue(Buffer.from('image-content'));
-      mockUploadFile.mockResolvedValue({
-        fileId: 'img-789',
-        webViewLink: 'https://drive.google.com/file/d/img-789/view',
-        folderPath: 'imagens/02-2026/',
-        filename: 'photo.jpg',
-      });
 
       await routeMessage({
         from: '5511999999999',
@@ -242,36 +259,58 @@ describe('Message Router', () => {
       });
 
       expect(mockDownloadMedia).toHaveBeenCalledWith('img-123');
-      expect(mockUploadFile).toHaveBeenCalledWith(
-        expect.any(Buffer),
-        expect.stringContaining('.jpg'),
-        'image/jpeg',
+      expect(mockSetPendingUpload).toHaveBeenCalledWith('5511999999999', {
+        buffer: expect.any(Buffer),
+        mimeType: 'image/jpeg',
+        originalFilename: undefined,
+      });
+
+      const askCall = mockSendText.mock.calls.find(
+        call => typeof call[1] === 'string' && call[1].includes('Como deseja salvar'),
       );
+      expect(askCall).toBeDefined();
     });
 
-    it('generates filename when not provided (IMAGE)', async () => {
-      mockDownloadMedia.mockResolvedValue(Buffer.from('data'));
+    it('uploads with caption-extracted name for IMAGE', async () => {
+      mockDownloadMedia.mockResolvedValue(Buffer.from('image-content'));
+      mockClassifyIntent.mockResolvedValue({
+        intent: Intent.UPLOAD_ARQUIVO,
+        entities: { nomeArquivo: 'lindo' },
+        confidence: 0.9,
+        rawText: 'Salvar com o nome lindo',
+      });
       mockUploadFile.mockResolvedValue({
-        fileId: 'f1',
-        webViewLink: 'https://drive.google.com/file/d/f1/view',
+        fileId: 'img-789',
+        webViewLink: 'https://drive.google.com/file/d/img-789/view',
         folderPath: 'imagens/02-2026/',
-        filename: 'generated.jpg',
+        filename: 'lindo.jpg',
       });
 
       await routeMessage({
         from: '5511999999999',
         type: MessageType.IMAGE,
-        mediaId: 'img-100',
+        mediaId: 'img-123',
         mimeType: 'image/jpeg',
+        text: 'Salvar com o nome lindo',
         timestamp: '1708100000',
       });
 
-      const uploadCall = mockUploadFile.mock.calls[0];
-      expect(uploadCall[1]).toMatch(/^arquivo_\d+\.jpg$/);
+      expect(mockUploadFile).toHaveBeenCalledWith(
+        expect.any(Buffer),
+        'lindo.jpg',
+        'image/jpeg',
+        undefined,
+      );
     });
 
-    it('sends driveUnavailable on Drive API error', async () => {
+    it('sends driveUnavailable on Drive API error (with caption)', async () => {
       mockDownloadMedia.mockResolvedValue(Buffer.from('data'));
+      mockClassifyIntent.mockResolvedValue({
+        intent: Intent.UPLOAD_ARQUIVO,
+        entities: { nomeArquivo: 'test' },
+        confidence: 0.9,
+        rawText: 'salvar como test',
+      });
       const driveError = new Error('Drive unavailable');
       (driveError as unknown as { code: string }).code = 'SERVICE_UNAVAILABLE';
       mockUploadFile.mockRejectedValue(driveError);
@@ -282,6 +321,7 @@ describe('Message Router', () => {
         mediaId: 'doc-err',
         mimeType: 'application/pdf',
         filename: 'test.pdf',
+        text: 'salvar como test',
         timestamp: '1708100000',
       });
 
@@ -312,6 +352,127 @@ describe('Message Router', () => {
 
       expect(mockDownloadMedia).not.toHaveBeenCalled();
       expect(mockSendText).toHaveBeenCalledWith('5511999999999', messages.errors.generic);
+    });
+  });
+
+  describe('Pending upload response flow', () => {
+    const pendingUploadData = {
+      buffer: Buffer.from('pending-image'),
+      mimeType: 'image/jpeg',
+      originalFilename: undefined,
+      expiresAt: Date.now() + 300000,
+    };
+
+    it('uploads with auto-organize when user replies "automatico"', async () => {
+      mockGetPendingUpload.mockReturnValue(pendingUploadData);
+      mockUploadFile.mockResolvedValue({
+        fileId: 'auto-123',
+        webViewLink: 'https://drive.google.com/file/d/auto-123/view',
+        folderPath: 'imagens/02-2026/',
+        filename: 'arquivo_1234.jpg',
+      });
+
+      await routeMessage({
+        from: '5511999999999',
+        type: MessageType.TEXT,
+        text: 'automatico',
+        timestamp: '1708100000',
+      });
+
+      expect(mockClearPendingUpload).toHaveBeenCalledWith('5511999999999');
+      expect(mockUploadFile).toHaveBeenCalledWith(
+        expect.any(Buffer),
+        expect.stringMatching(/^arquivo_\d+\.jpg$/),
+        'image/jpeg',
+        undefined,
+      );
+      expect(mockClassifyIntent).not.toHaveBeenCalled();
+    });
+
+    it('uploads with GPT-extracted name when user replies with name', async () => {
+      mockGetPendingUpload.mockReturnValue(pendingUploadData);
+      mockClassifyIntent.mockResolvedValue({
+        intent: Intent.UPLOAD_ARQUIVO,
+        entities: { nomeArquivo: 'foto-viagem', pastaDestino: 'fotos' },
+        confidence: 0.9,
+        rawText: 'foto-viagem na pasta fotos',
+      });
+      mockUploadFile.mockResolvedValue({
+        fileId: 'named-123',
+        webViewLink: 'https://drive.google.com/file/d/named-123/view',
+        folderPath: 'fotos/',
+        filename: 'foto-viagem.jpg',
+      });
+
+      await routeMessage({
+        from: '5511999999999',
+        type: MessageType.TEXT,
+        text: 'foto-viagem na pasta fotos',
+        timestamp: '1708100000',
+      });
+
+      expect(mockClearPendingUpload).toHaveBeenCalledWith('5511999999999');
+      expect(mockUploadFile).toHaveBeenCalledWith(
+        expect.any(Buffer),
+        'foto-viagem.jpg',
+        'image/jpeg',
+        'fotos',
+      );
+    });
+
+    it('uses originalFilename as fallback when GPT extracts no name', async () => {
+      const uploadWithFilename = {
+        ...pendingUploadData,
+        originalFilename: 'IMG_2024.jpg',
+      };
+      mockGetPendingUpload.mockReturnValue(uploadWithFilename);
+      mockClassifyIntent.mockResolvedValue({
+        intent: Intent.CLARIFICACAO,
+        entities: {},
+        confidence: 0.5,
+        rawText: 'pode ser',
+      });
+      mockUploadFile.mockResolvedValue({
+        fileId: 'fallback-123',
+        webViewLink: 'https://drive.google.com/file/d/fallback-123/view',
+        folderPath: 'imagens/02-2026/',
+        filename: 'IMG_2024.jpg',
+      });
+
+      await routeMessage({
+        from: '5511999999999',
+        type: MessageType.TEXT,
+        text: 'pode ser',
+        timestamp: '1708100000',
+      });
+
+      expect(mockUploadFile).toHaveBeenCalledWith(
+        expect.any(Buffer),
+        'IMG_2024.jpg',
+        'image/jpeg',
+        undefined,
+      );
+    });
+
+    it('uploads with "sim" as auto-organize shortcut', async () => {
+      mockGetPendingUpload.mockReturnValue(pendingUploadData);
+      mockUploadFile.mockResolvedValue({
+        fileId: 'sim-123',
+        webViewLink: 'https://drive.google.com/file/d/sim-123/view',
+        folderPath: 'imagens/02-2026/',
+        filename: 'arquivo_9999.jpg',
+      });
+
+      await routeMessage({
+        from: '5511999999999',
+        type: MessageType.TEXT,
+        text: 'sim',
+        timestamp: '1708100000',
+      });
+
+      expect(mockClearPendingUpload).toHaveBeenCalledWith('5511999999999');
+      expect(mockClassifyIntent).not.toHaveBeenCalled();
+      expect(mockUploadFile).toHaveBeenCalled();
     });
   });
 
@@ -428,6 +589,203 @@ describe('Message Router', () => {
     });
   });
 
+  describe('Resend invite flow', () => {
+    it('resends invite to new email using last action context', async () => {
+      mockGetLastAction.mockReturnValue({
+        type: 'meeting_created',
+        details: {
+          eventId: 'ev-1',
+          title: 'Daily',
+          meetLink: 'https://meet.google.com/abc',
+          dateTimeStr: '18/02 as 10:00',
+          failedInvites: ['old@email.com'],
+        },
+        timestamp: Date.now(),
+      });
+      mockClassifyIntent.mockResolvedValue({
+        intent: Intent.REENVIAR_CONVITE,
+        entities: {
+          participantes: [{ email: 'new@email.com' }],
+        },
+        confidence: 0.9,
+        rawText: 'envie pra esse entao new@email.com',
+      });
+      mockSendMeetingInvite.mockResolvedValue(undefined);
+
+      await routeMessage({
+        from: '5511999999999',
+        type: MessageType.TEXT,
+        text: 'envie pra esse entao new@email.com',
+        timestamp: '1708100000',
+      });
+
+      expect(mockSendMeetingInvite).toHaveBeenCalledWith(
+        'new@email.com',
+        'Daily',
+        'https://meet.google.com/abc',
+        '18/02 as 10:00',
+      );
+
+      const confirmCall = mockSendText.mock.calls.find(
+        call => typeof call[1] === 'string' && call[1].includes('reenviados'),
+      );
+      expect(confirmCall).toBeDefined();
+    });
+
+    it('resends invite to phone participant via WhatsApp', async () => {
+      mockGetLastAction.mockReturnValue({
+        type: 'meeting_created',
+        details: {
+          eventId: 'ev-1',
+          title: 'Sync',
+          meetLink: 'https://meet.google.com/xyz',
+          dateTimeStr: '18/02 as 14:00',
+          failedInvites: [],
+        },
+        timestamp: Date.now(),
+      });
+      mockClassifyIntent.mockResolvedValue({
+        intent: Intent.REENVIAR_CONVITE,
+        entities: {
+          participantes: [{ nome: 'Carlos', telefone: '5511777777777' }],
+        },
+        confidence: 0.9,
+        rawText: 'manda pro carlos 5511777777777',
+      });
+
+      await routeMessage({
+        from: '5511999999999',
+        type: MessageType.TEXT,
+        text: 'manda pro carlos 5511777777777',
+        timestamp: '1708100000',
+      });
+
+      const whatsappCall = mockSendText.mock.calls.find(
+        call => call[0] === '5511777777777',
+      );
+      expect(whatsappCall).toBeDefined();
+      expect(whatsappCall![1]).toContain('Sync');
+      expect(whatsappCall![1]).toContain('https://meet.google.com/xyz');
+      expect(mockSendMeetingInvite).not.toHaveBeenCalled();
+    });
+
+    it('tells user no meetLink when meeting has none', async () => {
+      mockGetLastAction.mockReturnValue({
+        type: 'meeting_created',
+        details: {
+          eventId: 'ev-1',
+          title: 'Sync',
+          meetLink: undefined,
+          dateTimeStr: '18/02 as 14:00',
+        },
+        timestamp: Date.now(),
+      });
+      mockClassifyIntent.mockResolvedValue({
+        intent: Intent.REENVIAR_CONVITE,
+        entities: { participantes: [{ email: 'a@b.com' }] },
+        confidence: 0.9,
+        rawText: 'envie pra a@b.com',
+      });
+
+      await routeMessage({
+        from: '5511999999999',
+        type: MessageType.TEXT,
+        text: 'envie pra a@b.com',
+        timestamp: '1708100000',
+      });
+
+      expect(mockSendMeetingInvite).not.toHaveBeenCalled();
+      const call = mockSendText.mock.calls.find(
+        c => typeof c[1] === 'string' && c[1].includes('nao tem link'),
+      );
+      expect(call).toBeDefined();
+    });
+
+    it('handles failed resend email gracefully', async () => {
+      mockGetLastAction.mockReturnValue({
+        type: 'meeting_created',
+        details: {
+          eventId: 'ev-1',
+          title: 'Daily',
+          meetLink: 'https://meet.google.com/abc',
+          dateTimeStr: '18/02 as 10:00',
+        },
+        timestamp: Date.now(),
+      });
+      mockClassifyIntent.mockResolvedValue({
+        intent: Intent.REENVIAR_CONVITE,
+        entities: { participantes: [{ email: 'bad@email.com' }] },
+        confidence: 0.9,
+        rawText: 'envie pra bad@email.com',
+      });
+      mockSendMeetingInvite.mockRejectedValue(new Error('SMTP error'));
+
+      await routeMessage({
+        from: '5511999999999',
+        type: MessageType.TEXT,
+        text: 'envie pra bad@email.com',
+        timestamp: '1708100000',
+      });
+
+      // Should not throw — reports failure in confirmation
+      const confirmCall = mockSendText.mock.calls.find(
+        call => call[0] === '5511999999999' && typeof call[1] === 'string' && call[1].includes('reenviados'),
+      );
+      expect(confirmCall).toBeDefined();
+      expect(confirmCall![1]).toContain('falha');
+    });
+
+    it('tells user no recent meeting when last action is not meeting_created', async () => {
+      mockGetLastAction.mockReturnValue({
+        type: 'event_created',
+        details: { eventId: 'ev-1', title: 'Dentista' },
+        timestamp: Date.now(),
+      });
+      mockClassifyIntent.mockResolvedValue({
+        intent: Intent.REENVIAR_CONVITE,
+        entities: { participantes: [{ email: 'a@b.com' }] },
+        confidence: 0.9,
+        rawText: 'envie pra a@b.com',
+      });
+
+      await routeMessage({
+        from: '5511999999999',
+        type: MessageType.TEXT,
+        text: 'envie pra a@b.com',
+        timestamp: '1708100000',
+      });
+
+      expect(mockSendMeetingInvite).not.toHaveBeenCalled();
+      const call = mockSendText.mock.calls.find(
+        c => typeof c[1] === 'string' && c[1].includes('Nao encontrei'),
+      );
+      expect(call).toBeDefined();
+    });
+
+    it('tells user no recent meeting when no last action', async () => {
+      mockGetLastAction.mockReturnValue(undefined);
+      mockClassifyIntent.mockResolvedValue({
+        intent: Intent.REENVIAR_CONVITE,
+        entities: { participantes: [{ email: 'a@b.com' }] },
+        confidence: 0.9,
+        rawText: 'envie pra a@b.com',
+      });
+
+      await routeMessage({
+        from: '5511999999999',
+        type: MessageType.TEXT,
+        text: 'envie pra a@b.com',
+        timestamp: '1708100000',
+      });
+
+      expect(mockSendMeetingInvite).not.toHaveBeenCalled();
+      const call = mockSendText.mock.calls.find(
+        c => typeof c[1] === 'string' && c[1].includes('Nao encontrei'),
+      );
+      expect(call).toBeDefined();
+    });
+  });
+
   describe('Event cancellation flow', () => {
     it('finds single event and asks for confirmation', async () => {
       mockClassifyIntent.mockResolvedValue({
@@ -461,7 +819,6 @@ describe('Message Router', () => {
     });
 
     it('confirms cancellation when user replies "sim"', async () => {
-      // Set up pending action
       pendingActions.set('5511999999999', {
         type: 'cancel_confirm',
         eventId: 'ev-cancel-1',
@@ -576,7 +933,7 @@ describe('Message Router', () => {
       expect(mockSendText).toHaveBeenCalledWith('5511999999999', messages.processing.audio);
       expect(mockDownloadMedia).toHaveBeenCalledWith('audio-123');
       expect(mockTranscribeAudio).toHaveBeenCalledWith(expect.any(Buffer));
-      expect(mockClassifyIntent).toHaveBeenCalledWith('agendar dentista amanha');
+      expect(mockClassifyIntent).toHaveBeenCalledWith('agendar dentista amanha', expect.any(Array));
     });
 
     it('sends whisperFailed when transcription returns empty', async () => {
@@ -661,6 +1018,7 @@ describe('Message Router', () => {
       });
 
       jest.clearAllMocks();
+      mockGetPendingUpload.mockReturnValue(undefined);
 
       // Second call — invalid option "abc"
       await routeMessage({

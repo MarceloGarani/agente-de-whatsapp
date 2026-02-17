@@ -84,16 +84,32 @@ export async function uploadFile(
   buffer: Buffer,
   filename: string,
   mimeType: string,
+  customFolder?: string,
 ): Promise<DriveUpload> {
   try {
     const auth = getAuthenticatedClient();
     const drive = google.drive({ version: 'v3', auth, timeout: TIMEOUTS.GOOGLE_APIS });
 
-    const category = getMimeCategory(mimeType);
-    const monthYear = getMonthYear();
+    let targetFolderId: string;
+    let folderPath: string;
 
-    const categoryFolderId = await getOrCreateFolder(drive, category);
-    const monthFolderId = await getOrCreateFolder(drive, monthYear, categoryFolderId);
+    if (customFolder) {
+      // User specified a custom folder — create nested path (e.g., "fotos/viagem")
+      const parts = customFolder.split('/').filter(Boolean);
+      let parentId: string | undefined;
+      for (const part of parts) {
+        parentId = await getOrCreateFolder(drive, part, parentId);
+      }
+      targetFolderId = parentId!;
+      folderPath = customFolder.endsWith('/') ? customFolder : `${customFolder}/`;
+    } else {
+      // Auto-organize by type/month
+      const category = getMimeCategory(mimeType);
+      const monthYear = getMonthYear();
+      const categoryFolderId = await getOrCreateFolder(drive, category);
+      targetFolderId = await getOrCreateFolder(drive, monthYear, categoryFolderId);
+      folderPath = `${category}/${monthYear}/`;
+    }
 
     const stream = new Readable();
     stream.push(buffer);
@@ -102,7 +118,7 @@ export async function uploadFile(
     const uploadRes = await drive.files.create({
       requestBody: {
         name: filename,
-        parents: [monthFolderId],
+        parents: [targetFolderId],
       },
       media: {
         mimeType,
@@ -113,7 +129,6 @@ export async function uploadFile(
 
     const fileId = uploadRes.data.id!;
     const webViewLink = uploadRes.data.webViewLink || `https://drive.google.com/file/d/${fileId}/view`;
-    const folderPath = `${category}/${monthYear}/`;
 
     logger.info(
       { service: 'drive', action: 'upload', fileId, folderPath, filename },

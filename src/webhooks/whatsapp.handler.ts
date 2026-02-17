@@ -71,12 +71,18 @@ export function extractMessage(body: unknown): IncomingMessage | null {
       incoming.mediaId = doc?.id;
       incoming.mimeType = doc?.mime_type;
       incoming.filename = doc?.filename;
+      if (doc?.caption) {
+        incoming.text = doc.caption;
+      }
     }
 
     if (type === MsgType.IMAGE) {
       const image = msg.image as Record<string, string> | undefined;
       incoming.mediaId = image?.id;
       incoming.mimeType = image?.mime_type;
+      if (image?.caption) {
+        incoming.text = image.caption;
+      }
     }
 
     return incoming;

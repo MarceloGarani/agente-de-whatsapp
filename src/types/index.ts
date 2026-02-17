@@ -5,6 +5,7 @@ export enum Intent {
   CRIAR_EVENTO = 'criar_evento',
   CRIAR_REUNIAO = 'criar_reuniao',
   CANCELAR_EVENTO = 'cancelar_evento',
+  REENVIAR_CONVITE = 'reenviar_convite',
   AJUDA = 'ajuda',
   CLARIFICACAO = 'clarificacao',
 }
@@ -25,6 +26,8 @@ export interface IntentEntities {
   hora?: string;
   duracao?: number;
   participantes?: Participant[];
+  nomeArquivo?: string;
+  pastaDestino?: string;
 }
 
 export interface Participant {

@@ -31,6 +31,8 @@ function buildSystemPrompt(): string {
 
 Sua tarefa: classificar a intencao e extrair entidades da mensagem do usuario.
 
+IMPORTANTE: Voce recebe o HISTORICO da conversa. Use-o para entender o contexto. O usuario pode fazer referencias a acoes anteriores como "envie pra esse entao", "muda o nome", "adiciona fulano", "tenta de novo". Interprete essas mensagens usando o contexto da conversa.
+
 ## DATA DE REFERENCIA (CRITICO)
 Hoje e ${todayWeekday}, ${todayISO}. Fuso horario: America/Sao_Paulo (BRT/BRST).
 
@@ -51,19 +53,24 @@ SEMPRE retorne a data convertida em formato YYYY-MM-DD. NUNCA retorne palavras c
 | criar_evento | agendar compromisso/evento no calendario | "marca dentista pra amanha as 14h", "agendar reuniao dia 20", "coloca na agenda almoco sexta 12h" |
 | criar_reuniao | criar reuniao com link Meet e/ou participantes | "cria reuniao com joao@email.com amanha 10h", "marca call com o time as 15h" |
 | cancelar_evento | cancelar evento/reuniao existente | "cancela meu dentista", "remove a reuniao de amanha" |
-| upload_arquivo | salvar arquivo no Google Drive | "salva esse arquivo", "guarda no drive" |
+| reenviar_convite | reenviar/enviar convite de reuniao recente para outro email ou participante | "envie pra esse entao fulano@email.com", "manda o convite pro joao tambem", "tenta enviar de novo" |
+| upload_arquivo | salvar arquivo no Google Drive (ou legenda/caption de um arquivo enviado) | "salva esse arquivo", "guarda no drive", "salvar com o nome relatorio" |
 | ajuda | pede ajuda ou quer saber capacidades | "o que voce faz?", "ajuda", "como funciona?" |
 | clarificacao | mensagem ambigua ou fora das categorias | qualquer mensagem que nao se encaixe claramente |
 
 Diferenciar criar_evento vs criar_reuniao: se menciona participantes (email, telefone, nomes de pessoas) ou pede "link meet/call/video", e criar_reuniao. Caso contrario, e criar_evento.
 
+Diferenciar criar_reuniao vs reenviar_convite: se o historico mostra que uma reuniao acabou de ser criada e o usuario quer enviar/reenviar o convite para alguem (novo email, novo participante, retry), use reenviar_convite. Se e uma reuniao totalmente nova, use criar_reuniao.
+
 ## EXTRACAO DE ENTIDADES
 
-- titulo: descricao curta do compromisso extraida da mensagem (ex: "dentista", "almoco com maria", "reuniao de projeto"). Se nao explicito, infira do contexto.
+- titulo: descricao curta do compromisso (ex: "dentista", "almoco com maria"). Se nao explicito, infira do contexto ou do historico.
 - data: OBRIGATORIO formato YYYY-MM-DD. Converta usando as regras acima.
-- hora: formato HH:MM em 24h. Se "2 da tarde" → "14:00", "meio-dia" → "12:00". Se nao mencionado, retorne null.
+- hora: formato HH:MM em 24h. Se "2 da tarde" → "14:00", "meio-dia" → "12:00", "10:30am" → "10:30", "10:30pm" → "22:30". Se nao mencionado, retorne null.
 - duracao: em minutos. Se nao mencionado, retorne null (sistema usara default de 60min).
-- participantes: lista de pessoas. Extraia nome, email e/ou telefone quando mencionados.
+- participantes: lista de pessoas. Extraia nome, email e/ou telefone quando mencionados. Inclua participantes mencionados na mensagem atual, mesmo que seja um follow-up.
+- nomeArquivo: nome desejado para o arquivo (ex: se usuario diz "salvar com o nome lindo", nomeArquivo = "lindo"). Sem extensao.
+- pastaDestino: pasta onde salvar o arquivo (ex: "na pasta fotos", "em documentos/trabalho"). Se nao mencionado, retorne null.
 
 ## CONFIDENCE
 Retorne um valor entre 0 e 1. Use >= 0.8 quando a intencao e clara e as entidades foram extraidas. Use 0.5-0.7 quando ha ambiguidade. Use < 0.5 quando a mensagem e incompreensivel.`;
@@ -78,7 +85,7 @@ const extractIntentSchema = {
     properties: {
       intent: {
         type: 'string' as const,
-        enum: ['upload_arquivo', 'criar_evento', 'criar_reuniao', 'cancelar_evento', 'ajuda', 'clarificacao'],
+        enum: ['upload_arquivo', 'criar_evento', 'criar_reuniao', 'cancelar_evento', 'reenviar_convite', 'ajuda', 'clarificacao'],
         description: 'A intencao classificada da mensagem',
       },
       entities: {
@@ -102,8 +109,10 @@ const extractIntentSchema = {
             },
             description: 'Lista de participantes',
           },
+          nomeArquivo: { type: ['string', 'null'] as const, description: 'Nome desejado para o arquivo (sem extensao)' },
+          pastaDestino: { type: ['string', 'null'] as const, description: 'Pasta de destino para o arquivo' },
         },
-        required: ['titulo', 'data', 'hora', 'duracao', 'participantes'],
+        required: ['titulo', 'data', 'hora', 'duracao', 'participantes', 'nomeArquivo', 'pastaDestino'],
         additionalProperties: false,
       },
       confidence: {
@@ -118,14 +127,32 @@ const extractIntentSchema = {
 
 const CONFIDENCE_THRESHOLD = 0.7;
 
-export async function classifyIntent(text: string): Promise<IntentResult> {
+export interface ConversationMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+export async function classifyIntent(
+  text: string,
+  history?: ConversationMessage[],
+): Promise<IntentResult> {
   try {
+    const chatMessages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
+      { role: 'system', content: buildSystemPrompt() },
+    ];
+
+    // Include conversation history for context
+    if (history && history.length > 0) {
+      for (const msg of history) {
+        chatMessages.push({ role: msg.role, content: msg.content });
+      }
+    }
+
+    chatMessages.push({ role: 'user', content: text });
+
     const response = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
-      messages: [
-        { role: 'system', content: buildSystemPrompt() },
-        { role: 'user', content: text },
-      ],
+      messages: chatMessages,
       tools: [{ type: 'function', function: extractIntentSchema }],
       tool_choice: { type: 'function', function: { name: 'extract_intent' } },
     });
@@ -160,9 +187,11 @@ export async function classifyIntent(text: string): Promise<IntentResult> {
     if (entities.data === null) delete entities.data;
     if (entities.hora === null) delete entities.hora;
     if (entities.duracao === null) delete entities.duracao;
+    if (entities.nomeArquivo === null) delete entities.nomeArquivo;
+    if (entities.pastaDestino === null) delete entities.pastaDestino;
 
     logger.info(
-      { service: 'intent-classifier', action: 'classify', intent, confidence: parsed.confidence },
+      { service: 'intent-classifier', action: 'classify', intent, confidence: parsed.confidence, historyLength: history?.length || 0 },
       `Intent classified: ${intent} (confidence: ${parsed.confidence})`,
     );
 

@@ -164,5 +164,36 @@ describe('Drive Service', () => {
         uploadFile(Buffer.from('data'), 'test.pdf', 'application/pdf'),
       ).rejects.toThrow();
     });
+
+    it('uploads to custom folder path when customFolder is provided', async () => {
+      // First list: "fotos" folder → not found
+      mockFilesList.mockResolvedValueOnce({ data: { files: [] } });
+      // Create "fotos" folder
+      mockFilesCreate.mockResolvedValueOnce({ data: { id: 'folder-fotos' } });
+      // Second list: "viagem" inside "fotos" → not found
+      mockFilesList.mockResolvedValueOnce({ data: { files: [] } });
+      // Create "viagem" folder
+      mockFilesCreate.mockResolvedValueOnce({ data: { id: 'folder-viagem' } });
+      // Upload file
+      mockFilesCreate.mockResolvedValueOnce({
+        data: { id: 'file-custom', webViewLink: 'https://drive.google.com/file/d/file-custom/view' },
+      });
+
+      const result = await uploadFile(
+        Buffer.from('image-data'),
+        'lindo.jpg',
+        'image/jpeg',
+        'fotos/viagem',
+      );
+
+      expect(result.fileId).toBe('file-custom');
+      expect(result.folderPath).toBe('fotos/viagem/');
+      expect(result.filename).toBe('lindo.jpg');
+
+      // 3 create calls: fotos folder, viagem folder, file upload
+      expect(mockFilesCreate).toHaveBeenCalledTimes(3);
+      const uploadCall = mockFilesCreate.mock.calls[2][0];
+      expect(uploadCall.requestBody.parents).toEqual(['folder-viagem']);
+    });
   });
 });
