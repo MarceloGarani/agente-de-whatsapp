@@ -10,24 +10,64 @@ const openai = new OpenAI({
   timeout: TIMEOUTS.OPENAI_GPT,
 });
 
-const SYSTEM_PROMPT = `Voce e um assistente que interpreta mensagens em portugues brasileiro. Classifique a intencao do usuario e extraia entidades relevantes.
+function buildSystemPrompt(): string {
+  // Use São Paulo timezone to get correct "today" regardless of server timezone
+  const now = new Date();
+  const spFormatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Sao_Paulo',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  });
+  const todayISO = spFormatter.format(now); // returns YYYY-MM-DD
 
-Intencoes possiveis:
-- upload_arquivo: usuario quer salvar/enviar arquivo no Google Drive
-- criar_evento: usuario quer agendar compromisso/evento na agenda
-- criar_reuniao: usuario quer criar reuniao com link Meet e participantes
-- cancelar_evento: usuario quer cancelar um evento/reuniao existente
-- ajuda: usuario pede ajuda ou quer saber o que o assistente faz
-- clarificacao: mensagem ambigua ou que nao se encaixa nas categorias acima
+  const weekdayFormatter = new Intl.DateTimeFormat('pt-BR', {
+    timeZone: 'America/Sao_Paulo',
+    weekday: 'long',
+  });
+  const todayWeekday = weekdayFormatter.format(now);
 
-Extraia entidades quando aplicavel:
-- titulo: nome/descricao do evento ou reuniao
-- data: data mencionada (formato YYYY-MM-DD quando possivel)
-- hora: horario mencionado (formato HH:MM)
-- duracao: duracao em minutos (padrao 60 se nao especificado)
-- participantes: lista de pessoas com nome, email ou telefone
+  return `Voce e o motor de interpretacao de um assistente pessoal inteligente via WhatsApp. O usuario interage em portugues brasileiro informal para gerenciar sua vida pessoal: salvar arquivos no Google Drive, agendar compromissos no Google Calendar, criar reunioes com Google Meet e enviar convites.
 
-Retorne um valor de confidence entre 0 e 1 indicando sua certeza na classificacao.`;
+Sua tarefa: classificar a intencao e extrair entidades da mensagem do usuario.
+
+## DATA DE REFERENCIA (CRITICO)
+Hoje e ${todayWeekday}, ${todayISO}. Fuso horario: America/Sao_Paulo (BRT/BRST).
+
+Regras de conversao de datas relativas:
+- "hoje" → ${todayISO}
+- "amanha" → dia seguinte a ${todayISO}
+- "depois de amanha" → dois dias apos ${todayISO}
+- "proxima segunda/terca/etc" → a proxima ocorrencia futura desse dia da semana a partir de ${todayISO}
+- "semana que vem" → 7 dias apos ${todayISO}
+- "mes que vem" → mesmo dia no proximo mes
+- Se o usuario disser apenas o dia (ex: "dia 20"), assuma o mes atual. Se o dia 20 ja passou neste mes, assuma o proximo mes.
+SEMPRE retorne a data convertida em formato YYYY-MM-DD. NUNCA retorne palavras como "amanha", "hoje", "proxima segunda".
+
+## INTENCOES
+
+| intent | descricao | exemplos |
+|--------|-----------|----------|
+| criar_evento | agendar compromisso/evento no calendario | "marca dentista pra amanha as 14h", "agendar reuniao dia 20", "coloca na agenda almoco sexta 12h" |
+| criar_reuniao | criar reuniao com link Meet e/ou participantes | "cria reuniao com joao@email.com amanha 10h", "marca call com o time as 15h" |
+| cancelar_evento | cancelar evento/reuniao existente | "cancela meu dentista", "remove a reuniao de amanha" |
+| upload_arquivo | salvar arquivo no Google Drive | "salva esse arquivo", "guarda no drive" |
+| ajuda | pede ajuda ou quer saber capacidades | "o que voce faz?", "ajuda", "como funciona?" |
+| clarificacao | mensagem ambigua ou fora das categorias | qualquer mensagem que nao se encaixe claramente |
+
+Diferenciar criar_evento vs criar_reuniao: se menciona participantes (email, telefone, nomes de pessoas) ou pede "link meet/call/video", e criar_reuniao. Caso contrario, e criar_evento.
+
+## EXTRACAO DE ENTIDADES
+
+- titulo: descricao curta do compromisso extraida da mensagem (ex: "dentista", "almoco com maria", "reuniao de projeto"). Se nao explicito, infira do contexto.
+- data: OBRIGATORIO formato YYYY-MM-DD. Converta usando as regras acima.
+- hora: formato HH:MM em 24h. Se "2 da tarde" → "14:00", "meio-dia" → "12:00". Se nao mencionado, retorne null.
+- duracao: em minutos. Se nao mencionado, retorne null (sistema usara default de 60min).
+- participantes: lista de pessoas. Extraia nome, email e/ou telefone quando mencionados.
+
+## CONFIDENCE
+Retorne um valor entre 0 e 1. Use >= 0.8 quando a intencao e clara e as entidades foram extraidas. Use 0.5-0.7 quando ha ambiguidade. Use < 0.5 quando a mensagem e incompreensivel.`;
+}
 
 const extractIntentSchema = {
   name: 'extract_intent',
@@ -83,7 +123,7 @@ export async function classifyIntent(text: string): Promise<IntentResult> {
     const response = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'system', content: buildSystemPrompt() },
         { role: 'user', content: text },
       ],
       tools: [{ type: 'function', function: extractIntentSchema }],

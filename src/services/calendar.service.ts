@@ -210,12 +210,19 @@ export function resolveDateTime(
 
 export function formatDateTimeBR(isoDate: string): { data: string; hora: string } {
   const d = new Date(isoDate);
-  const day = String(d.getDate()).padStart(2, '0');
-  const month = String(d.getMonth() + 1).padStart(2, '0');
-  const hours = String(d.getHours()).padStart(2, '0');
-  const minutes = String(d.getMinutes()).padStart(2, '0');
+  const dateFormatter = new Intl.DateTimeFormat('pt-BR', {
+    timeZone: TIMEZONE,
+    day: '2-digit',
+    month: '2-digit',
+  });
+  const timeFormatter = new Intl.DateTimeFormat('pt-BR', {
+    timeZone: TIMEZONE,
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
   return {
-    data: `${day}/${month}`,
-    hora: `${hours}:${minutes}`,
+    data: dateFormatter.format(d),
+    hora: timeFormatter.format(d),
   };
 }
